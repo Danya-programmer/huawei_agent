@@ -22,6 +22,13 @@ class _EchoSolver:
         )
 
 
+_MATH_OK = (
+    "The warehouse starts with 100 boxes. "
+    "It ships 3 boxes per day for 10 days. "
+    "It receives 2 deliveries of 5 boxes each."
+)
+
+
 class TestScheduler(unittest.TestCase):
     def test_writes_answer_on_solved(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -33,7 +40,7 @@ class TestScheduler(unittest.TestCase):
                     {
                         "task_id": "math_x",
                         "task_type": "math",
-                        "instruction": "x",
+                        "instruction": _MATH_OK,
                         "reward": 1,
                     }
                 ),
@@ -47,6 +54,40 @@ class TestScheduler(unittest.TestCase):
                 (task_dir / "answer.txt").read_text(encoding="utf-8"),
                 "42\n",
             )
+
+    def test_triage_skip_does_not_call_solver(self) -> None:
+        calls: list[str] = []
+
+        class _CountingSolver:
+            def solve(self, task: Task) -> Result:
+                calls.append(task.task_id)
+                return Result(status=Status.SOLVED, answer="x", cost=0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            task_dir = root / "csv_missing"
+            ws = task_dir / "workspace"
+            ws.mkdir(parents=True)
+            (task_dir / "task.json").write_text(
+                json.dumps(
+                    {
+                        "task_id": "csv_missing",
+                        "task_type": "data_analysis",
+                        "instruction": (
+                            "How many units of product 'A' were sold "
+                            "in months 1 through 2?"
+                        ),
+                        "reward": 2,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            registry = SolverRegistry()
+            registry.register(TaskType.DATA_ANALYSIS, _CountingSolver())
+            summary = SimpleScheduler(solvers=registry, journal=None).run(root)
+            self.assertEqual(calls, [])
+            self.assertEqual(summary.skipped, 1)
+            self.assertEqual(summary.results[0][1].status, Status.UNSOLVABLE)
 
 
 if __name__ == "__main__":

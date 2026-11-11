@@ -168,13 +168,15 @@ def _pattern_patch(src: str) -> str:
     return src
 
 
-def _preflight_coding(work_dir: Path) -> Optional[str]:
+def preflight_coding(work_dir: Path) -> Optional[str]:
     """Return skip reason if task looks unsolvable without LLM burn."""
     if not (work_dir / _TEST_FILE).is_file():
         return "missing_tests"
     if not (work_dir / _LIB_FILE).is_file():
         return "missing_mylib"
     test_src = (work_dir / _TEST_FILE).read_text(encoding="utf-8")
+    if not test_src.strip():
+        return "empty_tests"
     # If tests import something other than mylib, likely need edits outside scope.
     if re.search(r"^import (?!unittest|mylib)\w+", test_src, re.MULTILINE):
         # still ok if mylib is imported as alias
@@ -182,11 +184,23 @@ def _preflight_coding(work_dir: Path) -> Optional[str]:
     return None
 
 
+def react_enabled() -> bool:
+    """ReAct is on when LLM_* is set, unless HARNESS_USE_REACT explicitly disables."""
+    raw = os.environ.get("HARNESS_USE_REACT")
+    if raw is not None and raw.strip() != "":
+        return raw.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(
+        os.environ.get("LLM_API_KEY", "").strip()
+        and os.environ.get("LLM_BASE_URL", "").strip()
+    )
+
+
 class CodingSolver:
     """Fix mylib.py until tests pass; write DONE.
 
-    Uses a zero-token heuristic first. If ``HARNESS_USE_REACT=1`` and LLM env
-    is set, falls back to openJiuwen ReAct (see ``harness.react_agent``).
+    Uses a zero-token heuristic first. ReAct fallback defaults ON when
+    ``LLM_API_KEY`` and ``LLM_BASE_URL`` are set; set ``HARNESS_USE_REACT=0``
+    to disable (see ``harness.react_agent``).
     """
 
     def __init__(self, max_react_iters: int = 8) -> None:
@@ -194,7 +208,7 @@ class CodingSolver:
 
     def solve(self, task: Task) -> Result:
         work = task.work_dir
-        reason = _preflight_coding(work)
+        reason = preflight_coding(work)
         if reason:
             return Result(
                 status=Status.UNSOLVABLE,
@@ -213,7 +227,7 @@ class CodingSolver:
                 meta={"solver": "coding", "method": "heuristic"},
             )
 
-        if os.environ.get("HARNESS_USE_REACT", "").strip() in {"1", "true", "yes"}:
+        if react_enabled():
             try:
                 from harness.react_agent import run_coding_react
 
