@@ -36,10 +36,32 @@ _RECEIVE_RE = re.compile(
     r"receives\s+(\d+)\s+deliver(?:y|ies)\s+of\s+(\d+)\s+boxes each",
     re.IGNORECASE,
 )
+_CONTRADICTION_RE = re.compile(
+    r"cannot both be true|separately it is also said|also said to start with",
+    re.IGNORECASE,
+)
+_NON_INTEGER_START_RE = re.compile(
+    r"starts with\s+\d+\.\d+\s+boxes",
+    re.IGNORECASE,
+)
+
+
+def math_is_unsolvable(instruction: str) -> Optional[str]:
+    """Return a fail reason when the prompt is intentionally contradictory / non-integer."""
+    if _CONTRADICTION_RE.search(instruction):
+        return "contradictory_ops"
+    if _NON_INTEGER_START_RE.search(instruction):
+        return "non_integer_trap"
+    if len(list(_START_RE.finditer(instruction))) > 1:
+        return "contradictory_ops"
+    return None
 
 
 def parse_math_ops(instruction: str) -> Optional[list[MathOp]]:
     """Parse known warehouse templates into an op list. None = unrecognized."""
+    if math_is_unsolvable(instruction):
+        return None
+
     start = _START_RE.search(instruction)
     if not start:
         return None
@@ -104,6 +126,14 @@ class MathSolver:
     """Solve warehouse math templates without calling an LLM."""
 
     def solve(self, task: Task) -> Result:
+        bad = math_is_unsolvable(task.instruction)
+        if bad:
+            return Result(
+                status=Status.UNSOLVABLE,
+                cost=0,
+                error=bad,
+                meta={"reason": bad, "solver": "math"},
+            )
         answer = try_solve_math(task.instruction)
         if answer is None:
             return Result(

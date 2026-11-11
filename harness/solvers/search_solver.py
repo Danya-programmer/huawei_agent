@@ -124,9 +124,10 @@ def try_solve_search(instruction: str, kb_dir: Path) -> tuple[Optional[str], str
         person = people.get(_norm(person_name))
         if person is None:
             return None, "person_missing"
-        if not person.employer:
+        emp = (person.employer or "").strip()
+        if not emp or emp.upper() in {"UNKNOWN", "N/A", "NONE", "?"}:
             return None, "employer_missing"
-        company = companies.get(_norm(person.employer))
+        company = companies.get(_norm(emp))
         if company is None:
             return None, "company_missing"
         if not company.headquarters:

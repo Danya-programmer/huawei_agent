@@ -2,22 +2,36 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from harness.types import Task, TaskType
 
-# Median-ish costs in output-token units from dry-run heuristics.
-# Deterministic solvers cost ~0; coding/react is the expensive path.
+# Output-token cost bands (medians; fit_estimates.py can refresh from journal).
+COST_DETERMINISTIC = 1
+COST_SKIP = 0
+COST_SHORT_REACT = 800
+COST_CODING_HEURISTIC = 1
+COST_CODING_REACT = 2500
+COST_CODING_REACT_REASON = 6000
+
+# Legacy per-type defaults (used only if triage is unavailable).
 DEFAULT_COST: dict[TaskType, int] = {
-    TaskType.MATH: 1,
-    TaskType.DATA_ANALYSIS: 1,
-    TaskType.SEARCH: 1,
-    TaskType.CODING: 2500,
+    TaskType.MATH: COST_DETERMINISTIC,
+    TaskType.DATA_ANALYSIS: COST_DETERMINISTIC,
+    TaskType.SEARCH: COST_DETERMINISTIC,
+    TaskType.CODING: COST_CODING_REACT,
+}
+
+COST_BANDS: dict[str, int] = {
+    "deterministic": COST_DETERMINISTIC,
+    "skip": COST_SKIP,
+    "short_react": COST_SHORT_REACT,
+    "coding_heuristic": COST_CODING_HEURISTIC,
+    "coding_react": COST_CODING_REACT,
+    "coding_react_reason": COST_CODING_REACT_REASON,
 }
 
 
 def feature_adjust(task: Task) -> float:
-    """Simple multiplicative adjustment from task features."""
+    """Simple multiplicative adjustment from task features (legacy helper)."""
     instr_len = len(task.instruction)
     factor = 1.0
     if instr_len > 800:
@@ -54,10 +68,17 @@ def feature_adjust(task: Task) -> float:
 
 
 def expected_cost(task: Task) -> int:
-    base = DEFAULT_COST.get(task.task_type, 100)
-    return max(1, int(base * feature_adjust(task)))
+    """Prefer triage band; fall back to type defaults."""
+    try:
+        from harness.triage import triage
+
+        return int(triage(task).expected_cost)
+    except Exception:  # noqa: BLE001
+        base = DEFAULT_COST.get(task.task_type, 100)
+        return max(0, int(base * feature_adjust(task)))
 
 
 def value_score(task: Task) -> float:
-    """Higher is better: reward per expected token."""
-    return task.reward / max(expected_cost(task), 1)
+    """Higher is better: reward per expected token (phase-B style)."""
+    cost = max(expected_cost(task), 1)
+    return task.reward / cost
