@@ -4,6 +4,8 @@ __pycache__/
 .pytest_cache/
 task-dir/
 train-tasks/
+train-100/
+out/
 trajectories/
 *.jsonl
 .DS_Store
