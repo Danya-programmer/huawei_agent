@@ -1,0 +1,17 @@
+.git
+.venv
+__pycache__
+**/__pycache__
+*.pyc
+.pytest_cache
+task-dir
+task-dir.zip
+train-tasks
+trajectories
+__MACOSX
+*.md
+!README.md
+полезные статьи.md
+Регламент соревнования.md
+.cursor
+agent-transcripts

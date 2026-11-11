@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+task-dir/
+train-tasks/
+trajectories/
+*.jsonl
+.DS_Store
+__MACOSX/
+.env
+*.egg-info/
+dist/
+build/

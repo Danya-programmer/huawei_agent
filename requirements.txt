@@ -1,0 +1,2 @@
+# Pin at image-build time. Do not install extras (transformers/pymilvus/...).
+openjiuwen==0.1.19
