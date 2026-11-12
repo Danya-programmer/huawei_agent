@@ -1,14 +1,9 @@
 #!/usr/bin/env python3
-"""Fit cost-band medians from a cost journal JSONL.
-
-Safe no-op when the journal (or train-100) is missing:
+"""Fit ReAct cost-band medians from a cost journal JSONL.
 
   python scripts/fit_estimates.py
-  python scripts/fit_estimates.py --journal trajectories/cost_journal.jsonl
-  python scripts/fit_estimates.py --journal OUT/cost_journal.jsonl --write
-
-Prints suggested medians; with ``--write``, updates constants in harness/estimate.py
-when enough samples exist.
+  python scripts/fit_estimates.py --journal out/cost_journal.jsonl
+  python scripts/fit_estimates.py --journal out/cost_journal.jsonl --write
 """
 
 from __future__ import annotations
@@ -27,22 +22,17 @@ sys.path.insert(0, str(ROOT))
 
 from harness.estimate import (  # noqa: E402
     COST_BANDS,
-    COST_CODING_HEURISTIC,
     COST_CODING_REACT,
     COST_CODING_REACT_REASON,
-    COST_DETERMINISTIC,
     COST_SHORT_REACT,
     COST_SKIP,
 )
 
 ESTIMATE_PATH = ROOT / "harness" / "estimate.py"
 
-# Map journal fields → band keys used in estimate.py
 _BAND_KEYS = {
-    "deterministic": "COST_DETERMINISTIC",
     "skip": "COST_SKIP",
     "short_react": "COST_SHORT_REACT",
-    "coding_heuristic": "COST_CODING_HEURISTIC",
     "coding_react": "COST_CODING_REACT",
     "coding_react_reason": "COST_CODING_REACT_REASON",
 }
@@ -57,7 +47,6 @@ def _default_journal_candidates() -> list[Path]:
     cands.extend(
         [
             ROOT / "trajectories" / "cost_journal.jsonl",
-            ROOT / "train-100" / "cost_journal.jsonl",
             ROOT / "out" / "cost_journal.jsonl",
         ]
     )
@@ -92,30 +81,15 @@ def _classify_band(row: dict[str, Any]) -> Optional[str]:
     status = str(row.get("status") or "")
     task_type = str(row.get("task_type") or "")
     cost = int(row.get("cost") or 0)
-    method = str(row.get("method") or "")
-    solver = str(row.get("solver") or "")
-    lane = str(row.get("lane") or "")
+    model = str(row.get("model") or "")
 
-    if status in {"unsolvable", "skipped", "budget"} or cost == 0 and lane == "skip":
-        if status in {"unsolvable", "skipped"}:
-            return "skip"
-    if cost == 0 or method == "deterministic" or (
-        task_type in {"math", "data_analysis", "search"} and cost <= 5
-    ):
-        if method in {"deterministic", "heuristic"} or (
-            task_type != "coding" and cost <= 5 and status == "solved"
-        ):
-            return "deterministic" if task_type != "coding" else "coding_heuristic"
-    if method == "heuristic" or (task_type == "coding" and cost <= 5):
-        return "coding_heuristic"
-    if "reason" in str(row.get("model") or "") or cost >= COST_CODING_REACT_REASON * 0.5:
-        if task_type == "coding" or solver == "coding":
+    if status in {"unsolvable", "skipped", "budget"}:
+        return "skip"
+    if task_type == "coding" or "coding" in str(row.get("solver") or ""):
+        if "reason" in model or cost >= COST_CODING_REACT_REASON * 0.5:
             return "coding_react_reason"
-    if task_type == "coding" or solver == "coding" or method == "react":
-        if cost >= COST_SHORT_REACT:
-            return "coding_react"
-        return "coding_heuristic"
-    if lane == "needs_react_fallback" or COST_SHORT_REACT * 0.5 <= cost < COST_CODING_REACT:
+        return "coding_react"
+    if cost > 0:
         return "short_react"
     return None
 
@@ -134,18 +108,13 @@ def fit(records: list[dict[str, Any]]) -> dict[str, Optional[int]]:
             continue
         buckets[band].append(int(row.get("cost") or 0))
 
-    suggested = dict(COST_BANDS)
+    suggested: dict[str, Optional[int]] = {k: COST_BANDS.get(k) for k in _BAND_KEYS}
     for band in _BAND_KEYS:
         med = _median(buckets.get(band, []))
-        if med is None:
-            continue
-        # Journal often records 0 for local solvers; keep a 1-unit schedule stub.
-        if band in {"deterministic", "coding_heuristic"} and med <= 0:
-            med = COST_DETERMINISTIC if band == "deterministic" else COST_CODING_HEURISTIC
-        suggested[band] = med
-    # Always keep skip at 0
+        if med is not None and med > 0:
+            suggested[band] = med
     suggested["skip"] = COST_SKIP
-    return {k: suggested.get(k) for k in _BAND_KEYS}
+    return suggested
 
 
 def _print_report(
@@ -159,30 +128,19 @@ def _print_report(
     else:
         print(f"  journal: {journal} ({n_records} records)")
     print("  suggested medians:")
-    defaults = {
-        "deterministic": COST_DETERMINISTIC,
-        "skip": COST_SKIP,
-        "short_react": COST_SHORT_REACT,
-        "coding_heuristic": COST_CODING_HEURISTIC,
-        "coding_react": COST_CODING_REACT,
-        "coding_react_reason": COST_CODING_REACT_REASON,
-    }
-    for band, default in defaults.items():
-        val = suggested.get(band, default)
-        print(f"    {band:22s} {val}  (default {default})")
+    for band, const in _BAND_KEYS.items():
+        default = COST_BANDS[band]
+        print(f"    {band:22s} {suggested.get(band, default)}  (default {default})")
 
 
 def _write_estimate_py(suggested: dict[str, Optional[int]]) -> bool:
-    """Rewrite COST_* integer assignments when we have non-default suggestions."""
     if not ESTIMATE_PATH.is_file():
         print(f"  skip write: {ESTIMATE_PATH} missing", file=sys.stderr)
         return False
     text = ESTIMATE_PATH.read_text(encoding="utf-8")
     mapping = {
-        "COST_DETERMINISTIC": suggested.get("deterministic"),
         "COST_SKIP": suggested.get("skip"),
         "COST_SHORT_REACT": suggested.get("short_react"),
-        "COST_CODING_HEURISTIC": suggested.get("coding_heuristic"),
         "COST_CODING_REACT": suggested.get("coding_react"),
         "COST_CODING_REACT_REASON": suggested.get("coding_react_reason"),
     }
@@ -205,10 +163,7 @@ def _write_estimate_py(suggested: dict[str, Optional[int]]) -> bool:
 
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--journal",
-        help="Path to cost_journal.jsonl (optional; auto-discover if omitted)",
-    )
+    parser.add_argument("--journal", help="Path to cost_journal.jsonl")
     parser.add_argument(
         "--write",
         action="store_true",

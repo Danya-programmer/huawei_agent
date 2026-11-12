@@ -1,29 +1,22 @@
-"""Concrete solvers for competition task types."""
+"""Solvers: ReAct-only registry (no deterministic auto-solvers)."""
 
 from __future__ import annotations
 
 from harness.solver import SolverRegistry
-from harness.solvers.coding import CodingSolver
-from harness.solvers.csv_solver import CsvSolver
-from harness.solvers.math_solver import MathSolver
-from harness.solvers.search_solver import SearchSolver
+from harness.solvers.react_solver import ReactSolver
 from harness.types import TaskType
 
 
 def build_default_registry() -> SolverRegistry:
-    """Registry with all production solvers wired in."""
+    """Every task type goes through the ReAct agent."""
     registry = SolverRegistry()
-    registry.register(TaskType.MATH, MathSolver())
-    registry.register(TaskType.DATA_ANALYSIS, CsvSolver())
-    registry.register(TaskType.SEARCH, SearchSolver())
-    registry.register(TaskType.CODING, CodingSolver())
+    solver = ReactSolver(max_iterations=8)
+    for task_type in TaskType:
+        registry.register(task_type, solver)
     return registry
 
 
 __all__ = [
-    "CodingSolver",
-    "CsvSolver",
-    "MathSolver",
-    "SearchSolver",
+    "ReactSolver",
     "build_default_registry",
 ]

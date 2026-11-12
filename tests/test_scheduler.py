@@ -55,7 +55,7 @@ class TestScheduler(unittest.TestCase):
                 "42\n",
             )
 
-    def test_triage_skip_does_not_call_solver(self) -> None:
+    def test_react_lane_calls_solver(self) -> None:
         calls: list[str] = []
 
         class _CountingSolver:
@@ -65,18 +65,14 @@ class TestScheduler(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            task_dir = root / "csv_missing"
-            ws = task_dir / "workspace"
-            ws.mkdir(parents=True)
+            task_dir = root / "csv_any"
+            task_dir.mkdir()
             (task_dir / "task.json").write_text(
                 json.dumps(
                     {
-                        "task_id": "csv_missing",
+                        "task_id": "csv_any",
                         "task_type": "data_analysis",
-                        "instruction": (
-                            "How many units of product 'A' were sold "
-                            "in months 1 through 2?"
-                        ),
+                        "instruction": "Sum column units in table.csv",
                         "reward": 2,
                     }
                 ),
@@ -85,9 +81,8 @@ class TestScheduler(unittest.TestCase):
             registry = SolverRegistry()
             registry.register(TaskType.DATA_ANALYSIS, _CountingSolver())
             summary = SimpleScheduler(solvers=registry, journal=None).run(root)
-            self.assertEqual(calls, [])
-            self.assertEqual(summary.skipped, 1)
-            self.assertEqual(summary.results[0][1].status, Status.UNSOLVABLE)
+            self.assertEqual(calls, ["csv_any"])
+            self.assertEqual(summary.solved, 1)
 
 
 if __name__ == "__main__":

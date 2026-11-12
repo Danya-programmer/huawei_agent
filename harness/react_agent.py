@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import os
+import subprocess
 import uuid
+from pathlib import Path
 from typing import Any, Optional
 
 from harness.cost import cost_from_usage
@@ -18,12 +20,33 @@ When all tests pass, write exactly DONE to answer.txt (e.g. `echo DONE > answer.
 Prefer short shell/python commands. Do not invent files outside this directory.
 """
 
+GENERAL_SYSTEM_PROMPT = """You are a careful task-solving agent working ONLY inside the current directory.
+Read the instruction, use bash/python/file tools as needed, and finish by writing ONLY the final
+answer to answer.txt in the current directory (for example: echo 42 > answer.txt).
+Do not invent files outside this directory. Prefer short tool calls. If the task is clearly
+impossible with the given files, write NOTHING and stop.
+"""
+
 
 def _env(name: str, default: Optional[str] = None) -> Optional[str]:
     val = os.environ.get(name)
     if val is None or val == "":
         return default
     return val
+
+
+def _run_tests(work_dir: Path, timeout: float = 20.0) -> tuple[bool, str]:
+    """Run ``python3 test_mylib.py`` in the coding workspace."""
+    proc = subprocess.run(
+        ["python3", "test_mylib.py"],
+        cwd=str(work_dir),
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
+    )
+    out = (proc.stdout or "") + (proc.stderr or "")
+    return proc.returncode == 0, out
 
 
 def build_react_agent(
@@ -124,6 +147,188 @@ async def _ensure_runner_started() -> None:
         await maybe
 
 
+def _read_answer(task: Task) -> Optional[str]:
+    for candidate in (task.work_dir / "answer.txt", task.task_dir / "answer.txt"):
+        if candidate.is_file():
+            text = candidate.read_text(encoding="utf-8").strip()
+            if text:
+                return text
+    return None
+
+
+def _openai_chat_answer(task: Task, *, model_name: str) -> Result:
+    """Minimal OpenAI-compatible single-shot fallback (no openjiuwen / no tools)."""
+    import json
+    import urllib.request
+
+    from harness.cost import compute_call_cost
+
+    base = (_env("LLM_BASE_URL") or "").rstrip("/")
+    key = _env("LLM_API_KEY") or ""
+    body = json.dumps(
+        {
+            "model": model_name,
+            "temperature": 0,
+            "max_tokens": 128,
+            "messages": [
+                {"role": "system", "content": GENERAL_SYSTEM_PROMPT},
+                {
+                    "role": "user",
+                    "content": (
+                        f"Task type: {task.task_type.value}\n"
+                        f"Instruction:\n{task.instruction}\n\n"
+                        "Reply with ONLY the final answer text (no markdown)."
+                    ),
+                },
+            ],
+        }
+    ).encode("utf-8")
+    req = urllib.request.Request(
+        f"{base}/chat/completions",
+        data=body,
+        headers={
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=90) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        err = str(exc).lower()
+        status = Status.BUDGET if "budget" in err or "429" in err else Status.ERROR
+        return Result(
+            status=status,
+            cost=0,
+            model=model_name,
+            error=f"{type(exc).__name__}: {exc}",
+            meta={"solver": "openai_chat_fallback"},
+        )
+
+    usage = payload.get("usage") or {}
+    details = usage.get("completion_tokens_details") or {}
+    prompt_tokens = int(usage.get("prompt_tokens") or 0)
+    completion_tokens = int(usage.get("completion_tokens") or 0)
+    reasoning_tokens = int(
+        details.get("reasoning_tokens") or usage.get("reasoning_tokens") or 0
+    )
+    cost = compute_call_cost(prompt_tokens, completion_tokens, reasoning_tokens)
+    content = ((payload.get("choices") or [{}])[0].get("message") or {}).get("content")
+    answer = (content or "").strip().splitlines()[-1].strip() if content else ""
+    if not answer:
+        return Result(
+            status=Status.FAILED,
+            cost=cost,
+            model=model_name,
+            error="empty_model_answer",
+            meta={"solver": "openai_chat_fallback"},
+        )
+    # Persist answer.txt for consistency with the contest contract.
+    try:
+        target = task.work_dir / "answer.txt"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(answer + "\n", encoding="utf-8")
+    except OSError:
+        pass
+    return Result(
+        status=Status.SOLVED,
+        answer=answer,
+        cost=cost,
+        model=model_name,
+        usage=TokenUsage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            reasoning_tokens=reasoning_tokens,
+        ),
+        meta={"solver": "openai_chat_fallback"},
+    )
+
+
+def run_task_react(
+    task: Task,
+    *,
+    max_iterations: int = 4,
+    model: Optional[str] = None,
+    system_prompt: str = GENERAL_SYSTEM_PROMPT,
+) -> Result:
+    """Synchronously run a general ReAct agent; expects answer.txt.
+
+    Falls back to a single OpenAI-compatible chat call if openjiuwen is missing.
+    """
+    if not _env("LLM_API_KEY") or not _env("LLM_BASE_URL"):
+        return Result(
+            status=Status.FAILED,
+            cost=0,
+            error="LLM_API_KEY/LLM_BASE_URL not set",
+            meta={"solver": "task_react"},
+        )
+
+    model_name = model or DEFAULT_MODEL.value
+    try:
+        import openjiuwen  # noqa: F401
+    except ImportError:
+        return _openai_chat_answer(task, model_name=model_name)
+
+    work_dir = str(task.work_dir)
+
+    async def _run() -> Result:
+        await _ensure_runner_started()
+        agent = build_react_agent(
+            work_dir,
+            model_name=model_name,
+            max_iterations=max_iterations,
+            system_prompt=system_prompt,
+        )
+        query = (
+            f"Task id: {task.task_id}\n"
+            f"Task type: {task.task_type.value}\n"
+            f"Working directory is already set to the task workspace.\n"
+            f"Instruction:\n{task.instruction}\n"
+        )
+        try:
+            result = await agent.ainvoke({"query": query})
+        except Exception as exc:  # noqa: BLE001
+            err = str(exc).lower()
+            status = Status.BUDGET if "budget" in err or "429" in err else Status.ERROR
+            return Result(
+                status=status,
+                cost=0,
+                model=model_name,
+                error=f"{type(exc).__name__}: {exc}",
+                meta={"solver": "task_react"},
+            )
+
+        usage = extract_usage(result)
+        cost = cost_from_usage(usage)
+        answer = _read_answer(task)
+        if answer is None and isinstance(result, dict):
+            content = result.get("content") or result.get("output")
+            if isinstance(content, str) and content.strip():
+                # Last resort: model replied in chat without writing the file.
+                answer = content.strip().splitlines()[-1].strip()
+
+        if answer:
+            return Result(
+                status=Status.SOLVED,
+                answer=answer,
+                cost=cost,
+                model=model_name,
+                usage=usage,
+                meta={"solver": "task_react"},
+            )
+        return Result(
+            status=Status.FAILED,
+            cost=cost,
+            model=model_name,
+            usage=usage,
+            error="no_answer_txt",
+            meta={"solver": "task_react"},
+        )
+
+    return asyncio.run(_run())
+
+
 def run_coding_react(
     task: Task,
     *,
@@ -148,6 +353,7 @@ def run_coding_react(
             work_dir,
             model_name=model_name,
             max_iterations=max_iterations,
+            system_prompt=CODING_SYSTEM_PROMPT,
         )
         query = (
             f"Task id: {task.task_id}\n"
@@ -170,19 +376,11 @@ def run_coding_react(
         usage = extract_usage(result)
         cost = cost_from_usage(usage)
 
-        # Prefer answer written by the agent into work_dir or task_dir.
-        answer = None
-        for candidate in (task.work_dir / "answer.txt", task.task_dir / "answer.txt"):
-            if candidate.is_file():
-                answer = candidate.read_text(encoding="utf-8").strip()
-                break
+        answer = _read_answer(task)
         if answer is None and isinstance(result, dict):
             content = result.get("content") or result.get("output")
             if isinstance(content, str) and "DONE" in content.upper():
                 answer = "DONE"
-
-        # Cheap verification: tests must pass.
-        from harness.solvers.coding import _run_tests
 
         ok, out = _run_tests(task.work_dir)
         if ok:

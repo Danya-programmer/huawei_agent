@@ -97,10 +97,11 @@ def plan(tasks: list[Task]) -> PlannedWork:
         profiles[task.task_id] = profile
         if profile.lane == "skip" or not profile.feasible:
             skips.append(task)
-        elif profile.lane == "cheap":
+        elif profile.lane == "react":
+            # Short ReAct (math / data_analysis / search) first.
             phase_a.append(task)
         else:
-            # coding + needs_react_fallback
+            # coding (longer ReAct)
             phase_b.append(task)
 
     phase_a.sort(
