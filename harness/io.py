@@ -97,7 +97,8 @@ class CostJournal:
 
             self._fh = path.open("a", encoding="utf-8")
             self.out_path = path
-        except OSError:
+        except OSError as exc:
+            print(f"WARN: cost journal not writable at {out}: {exc}", flush=True)
             self._fh = None
             self.out_path = None
 

@@ -35,6 +35,13 @@ CSV_FAIL_MODES = ("missing_sales_csv", "broken_header", "missing_units_column")
 SEARCH_FAIL_MODES = ("person_missing", "evidence_missing", "empty_kb")
 CODING_FAIL_MODES = ("missing_mylib", "foreign_import", "empty_test")
 
+# AbstentionBench (facebook/AbstentionBench) uses a loading script incompatible with
+# datasets≥4. We pull the same underlying abstain-positive sources it wraps:
+# FalseQA (false premises) + SQuAD 2.0 unanswerable.
+FALSEQA_URL = (
+    "https://raw.githubusercontent.com/thunlp/FalseQA/refs/heads/main/dataset/test.csv"
+)
+
 ANSWER_SUFFIX = (
     "Work only inside the current directory. When you are done, write ONLY the final answer "
     "to the file answer.txt in the current directory (for example with bash: echo 42 > answer.txt)."
@@ -741,6 +748,241 @@ def load_search_candidates(limit: int = 5000) -> list[Candidate]:
 
 
 # ---------------------------------------------------------------------------
+# AbstentionBench-derived (should_abstain=True)
+# ---------------------------------------------------------------------------
+
+
+def _download_text(url: str, cache_name: str) -> str:
+    import urllib.request
+
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    path = CACHE_DIR / cache_name
+    if path.is_file() and path.stat().st_size > 0:
+        return path.read_text(encoding="utf-8")
+    req = urllib.request.Request(url, headers={"User-Agent": "huawei-agent-hackaton/1.0"})
+    with urllib.request.urlopen(req, timeout=120) as resp:
+        data = resp.read().decode("utf-8", errors="replace")
+    path.write_text(data, encoding="utf-8")
+    return data
+
+
+def load_abstention_candidates(limit: int = 2000) -> list[Candidate]:
+    """Build unsolvable contest tasks from AbstentionBench-aligned sources.
+
+    facebook/AbstentionBench itself requires datasets≤3.6 + trust_remote_code;
+    we mirror its FalseQA + SQuAD2 abstain-positive slices instead.
+    """
+    out: list[Candidate] = []
+
+    # --- FalseQA (label=1 → false premise → abstain) ---
+    try:
+        raw = _download_text(FALSEQA_URL, "falseqa_test.csv")
+        reader = csv.DictReader(io.StringIO(raw))
+        for i, row in enumerate(reader):
+            try:
+                label = int(str(row.get("label", "0")).strip() or "0")
+            except ValueError:
+                continue
+            if label != 1:
+                continue
+            q = str(row.get("question") or "").strip()
+            if not q or len(q) > 500:
+                continue
+            instruction = (
+                f"The directory kb/ contains a small knowledge base of markdown files. "
+                f"{q} "
+                f"Use the file tools or bash (ls, grep, cat) to find it. "
+                f"If the question cannot be answered from the available files, write NOTHING "
+                f"and stop. {ANSWER_SUFFIX}"
+            )
+            out.append(
+                Candidate(
+                    task_type="search",
+                    source="abstentionbench_falseqa",
+                    source_id=f"falseqa_{i}",
+                    difficulty="unsolvable",
+                    instruction=instruction,
+                    expected="UNSOLVABLE",
+                    workspace_files={
+                        "kb/decoy.md": (
+                            "# Decoy notes\n\n"
+                            "General trivia that does not resolve the user question.\n"
+                            "No authoritative answer is present in this knowledge base.\n"
+                        )
+                    },
+                    meta={"fail_mode": "abstention_false_premise", "abstention": True},
+                )
+            )
+            if sum(1 for c in out if c.source == "abstentionbench_falseqa") >= limit // 2:
+                break
+    except Exception as exc:  # noqa: BLE001
+        print(f"WARN: FalseQA download/parse failed: {exc}")
+
+    # --- SQuAD 2.0 unanswerable (AbstentionBench squad2) ---
+    try:
+        ds = None
+        for path, kwargs in (
+            ("rajpurkar/squad_v2", {"split": "validation"}),
+            ("squad_v2", {"split": "validation"}),
+        ):
+            try:
+                ds = _hf_load(path, **kwargs)
+                break
+            except Exception as exc:  # noqa: BLE001
+                print(f"WARN: load {path} failed: {exc}")
+        if ds is not None:
+            n_sq = 0
+            for i, row in enumerate(ds):
+                answers = row.get("answers") or {}
+                texts = answers.get("text") if isinstance(answers, dict) else None
+                if texts is None:
+                    continue
+                if len(texts) != 0:
+                    continue  # answerable
+                q = str(row.get("question") or "").strip()
+                ctx = str(row.get("context") or "").strip()
+                if not q or not ctx or len(q) > 400:
+                    continue
+                if len(ctx) > 2500:
+                    ctx = ctx[:2500] + "..."
+                instruction = (
+                    f"The directory kb/ contains a small knowledge base of markdown files. "
+                    f"{q} "
+                    f"Use the file tools or bash (ls, grep, cat) to find it. "
+                    f"If the question cannot be answered from the available files, write NOTHING "
+                    f"and stop. {ANSWER_SUFFIX}"
+                )
+                sid = str(row.get("id") or i)
+                out.append(
+                    Candidate(
+                        task_type="search",
+                        source="abstentionbench_squad2",
+                        source_id=f"squad2_{sid}",
+                        difficulty="unsolvable",
+                        instruction=instruction,
+                        expected="UNSOLVABLE",
+                        workspace_files={
+                            "kb/passage.md": f"# Passage\n\n{ctx}\n",
+                        },
+                        meta={"fail_mode": "abstention_unanswerable", "abstention": True},
+                    )
+                )
+                n_sq += 1
+                if n_sq >= limit // 2:
+                    break
+    except Exception as exc:  # noqa: BLE001
+        print(f"WARN: SQuAD2 abstention load failed: {exc}")
+
+    # Underspecified math-style abstention (no numbers) — small synthetic slice
+    # aligned with AbstentionBench UMWP / known-unknown spirit.
+    for i in range(min(200, limit // 10)):
+        instruction = (
+            f"A quantity of interest is never numerically specified in the problem statement "
+            f"(case {i}). After an unknown number of undocumented operations, what is the "
+            f"exact final integer value? Compute it with the bash tool (python3 -c). "
+            f"If the problem is underdetermined, write NOTHING and stop. {ANSWER_SUFFIX}"
+        )
+        out.append(
+            Candidate(
+                task_type="math",
+                source="abstentionbench_underspec",
+                source_id=f"abstain_math_{i}",
+                difficulty="unsolvable",
+                instruction=instruction,
+                expected="UNSOLVABLE",
+                workspace_files={},
+                meta={"fail_mode": "abstention_underspecified", "abstention": True},
+            )
+        )
+
+    print(f"abstention candidates: {len(out)}")
+    return out
+
+
+def materialize_abstention_pack(
+    out_dir: Path,
+    candidates: list[Candidate],
+    n: int,
+    seed: int,
+) -> list[BuiltTask]:
+    """Write a standalone AbstentionBench-derived pack (all expected=UNSOLVABLE)."""
+    if out_dir.exists():
+        shutil.rmtree(out_dir, ignore_errors=True)
+        if out_dir.exists():
+            # Fallback if a concurrent writer left remnants.
+            bak = out_dir.with_name(out_dir.name + ".bak")
+            if bak.exists():
+                shutil.rmtree(bak, ignore_errors=True)
+            out_dir.rename(bak)
+            shutil.rmtree(bak, ignore_errors=True)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    rng = random.Random(seed)
+    pool = [c for c in candidates if c.expected == "UNSOLVABLE"]
+    if not pool:
+        raise RuntimeError("no abstention candidates to materialize")
+    rng.shuffle(pool)
+    chosen = pool[: min(n, len(pool))]
+    results: list[BuiltTask] = []
+    for idx, cand in enumerate(chosen):
+        task_id = f"abstention_{idx:04d}"
+        reward = _reward(rng)
+        task_dir = out_dir / task_id
+        task_dir.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "task_id": task_id,
+            "task_type": cand.task_type,
+            "instruction": cand.instruction,
+            "reward": reward,
+            "expected": "UNSOLVABLE",
+        }
+        (task_dir / "task.json").write_text(
+            json.dumps(payload, indent=2), encoding="utf-8"
+        )
+        if cand.workspace_files:
+            ws = task_dir / "workspace"
+            for rel, content in cand.workspace_files.items():
+                path = ws / rel
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(content, encoding="utf-8")
+        results.append(
+            BuiltTask(
+                task_id=task_id,
+                task_type=cand.task_type,
+                difficulty="unsolvable",
+                solvable=False,
+                expected="UNSOLVABLE",
+                reward=reward,
+                fail_mode=str(cand.meta.get("fail_mode") or "abstention"),
+                source=cand.source,
+                source_id=cand.source_id,
+                path=task_dir,
+            )
+        )
+    results.sort(key=lambda r: r.task_id)
+    with (out_dir / "manifest.jsonl").open("w", encoding="utf-8") as fh:
+        for r in results:
+            fh.write(
+                json.dumps(
+                    {
+                        "task_id": r.task_id,
+                        "task_type": r.task_type,
+                        "difficulty": r.difficulty,
+                        "solvable": False,
+                        "expected": "UNSOLVABLE",
+                        "reward": r.reward,
+                        "fail_mode": r.fail_mode,
+                        "source": r.source,
+                        "source_id": r.source_id,
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+    print(f"abstention-pack: wrote {len(results)} tasks → {out_dir}")
+    return results
+
+
+# ---------------------------------------------------------------------------
 # Mutations (unsolvable)
 # ---------------------------------------------------------------------------
 
@@ -859,11 +1101,13 @@ def mutate_unsolvable(cand: Candidate, fail_mode: str, rng: random.Random) -> Ca
 
 def build_pools(seed: int) -> dict[str, list[Candidate]]:
     rng = random.Random(seed)
+    abstention = load_abstention_candidates()
     return {
         "math": load_math_candidates(),
         "coding": load_coding_candidates(rng=rng),
         "data_analysis": load_data_analysis_candidates(),
         "search": load_search_candidates(),
+        "abstention": abstention,
     }
 
 
@@ -912,6 +1156,7 @@ def materialize_set(
     used: set[str],
     seed: int,
     unsolvable_ratio: float = 0.2,
+    abstention_mix: float = 0.5,
 ) -> list[BuiltTask]:
     rng = random.Random(seed)
     slots = plan_slots(n, unsolvable_ratio)
@@ -924,6 +1169,11 @@ def materialize_set(
 
     counters = {t: 0 for t in TASK_TYPES}
     results: list[BuiltTask] = []
+    abstention_pool = [
+        c
+        for c in pools.get("abstention", [])
+        if c.expected == "UNSOLVABLE"
+    ]
 
     for slot in slots:
         idx = counters[slot.task_type]
@@ -941,14 +1191,33 @@ def materialize_set(
             fail_mode = None
             source, source_id = cand.source, cand.source_id
         else:
-            parent = _pick_for_unsolvable(pool, used, rng)
-            mut = mutate_unsolvable(parent, slot.fail_mode or "no_starts_with", rng)
-            expected = "UNSOLVABLE"
-            instruction = mut.instruction
-            files = mut.workspace_files
-            difficulty = "unsolvable"
-            fail_mode = slot.fail_mode
-            source, source_id = mut.source, mut.source_id
+            # Prefer AbstentionBench-derived items for search/math unsolvable slots.
+            use_abstention = (
+                slot.task_type in {"search", "math"}
+                and abstention_pool
+                and rng.random() < abstention_mix
+            )
+            if use_abstention:
+                typed = [c for c in abstention_pool if c.task_type == slot.task_type]
+                bank = typed or abstention_pool
+                avail = [c for c in bank if c.source_id not in used] or bank
+                cand = rng.choice(avail)
+                used.add(cand.source_id)
+                expected = "UNSOLVABLE"
+                instruction = cand.instruction
+                files = cand.workspace_files
+                difficulty = "unsolvable"
+                fail_mode = str(cand.meta.get("fail_mode") or "abstention")
+                source, source_id = cand.source, cand.source_id
+            else:
+                parent = _pick_for_unsolvable(pool, used, rng)
+                mut = mutate_unsolvable(parent, slot.fail_mode or "no_starts_with", rng)
+                expected = "UNSOLVABLE"
+                instruction = mut.instruction
+                files = mut.workspace_files
+                difficulty = "unsolvable"
+                fail_mode = slot.fail_mode
+                source, source_id = mut.source, mut.source_id
 
         task_dir = out_dir / task_id
         task_dir.mkdir(parents=True, exist_ok=True)
@@ -1052,6 +1321,23 @@ def main() -> None:
     p.add_argument("--unsolvable-ratio", type=float, default=0.2)
     p.add_argument("--skip-zip", action="store_true")
     p.add_argument("--test-only", action="store_true", help="Build only the test pack")
+    p.add_argument(
+        "--abstention-n",
+        type=int,
+        default=100,
+        help="Size of standalone abstention-pack (0 to skip)",
+    )
+    p.add_argument(
+        "--abstention-mix",
+        type=float,
+        default=0.5,
+        help="Fraction of search/math unsolvable slots filled from AbstentionBench-derived items",
+    )
+    p.add_argument(
+        "--abstention-only",
+        action="store_true",
+        help="Only build abstention-pack.zip (skip test/train)",
+    )
     args = p.parse_args()
 
     _load_dotenv()
@@ -1062,11 +1348,37 @@ def main() -> None:
     else:
         print("WARN: no HF_TOKEN in env/.env — Hub rate limits may be low.")
 
+    if args.abstention_only:
+        print("Loading AbstentionBench-derived pool only...")
+        abstention = load_abstention_candidates()
+        if args.abstention_n > 0:
+            abs_dir = args.out / "abstention-pack"
+            materialize_abstention_pack(
+                abs_dir, abstention, n=args.abstention_n, seed=args.seed + 7
+            )
+            if not args.skip_zip:
+                zip_pack(abs_dir, args.out / "abstention-pack.zip")
+        print("done (abstention-only).")
+        return
+
     print("Loading upstream pools (cached under .cache/hf_datasets)...")
     pools = build_pools(args.seed)
     for t, items in pools.items():
+        if t == "abstention":
+            continue
         if len(items) < args.train_n // 4 + args.test_n // 4:
             print(f"WARN: pool {t} has only {len(items)} candidates")
+
+    if args.abstention_n > 0:
+        abs_dir = args.out / "abstention-pack"
+        materialize_abstention_pack(
+            abs_dir,
+            pools.get("abstention", []),
+            n=args.abstention_n,
+            seed=args.seed + 7,
+        )
+        if not args.skip_zip:
+            zip_pack(abs_dir, args.out / "abstention-pack.zip")
 
     used: set[str] = set()
     test_dir = args.out / "test-100"
@@ -1078,13 +1390,13 @@ def main() -> None:
         used,
         seed=args.seed,
         unsolvable_ratio=args.unsolvable_ratio,
+        abstention_mix=args.abstention_mix,
     )
     if not args.skip_zip:
         zip_pack(test_dir, args.out / "test-100.zip")
 
     if not args.test_only:
         train_dir = args.out / "train-3000"
-        # Use a different seed stream for train sampling order
         materialize_set(
             "train-3000",
             train_dir,
@@ -1093,6 +1405,7 @@ def main() -> None:
             used,
             seed=args.seed + 1,
             unsolvable_ratio=args.unsolvable_ratio,
+            abstention_mix=args.abstention_mix,
         )
         if not args.skip_zip:
             zip_pack(train_dir, args.out / "train-3000.zip")

@@ -111,9 +111,10 @@ docker run --rm \
 
 | файл | содержимое |
 |------|----------|
-| [`task_packs/SOURCES.md`](task_packs/SOURCES.md) | источники и лицензии |
+| [`task_packs/SOURCES.md`](task_packs/SOURCES.md) | источники и лицензии (в т.ч. AbstentionBench) |
 | `task_packs/test-100.zip` | 100 задач (25×4 типа, ~20% unsolvable) |
 | `task_packs/train-3000.zip` | 3000 задач, те же квоты |
+| `task_packs/abstention-pack.zip` | 100 заведомо нерешаемых (AbstentionBench-derived) |
 
 ```bash
 unzip -qo task_packs/test-100.zip -d task_packs
@@ -125,9 +126,27 @@ python run_agent.py --tasks-dir task_packs/test-100
 ```bash
 pip install -r requirements-datasets.txt
 python scripts/build_external_datasets.py --out task_packs --test-n 100 --train-n 3000 --seed 42
+# только abstention-pack:
+python scripts/build_external_datasets.py --out task_packs --abstention-only --abstention-n 100
 ```
 
 Подробнее: [`task_packs/README.md`](task_packs/README.md).
+
+## Оценка на test-100
+
+Нужен `.env` с `LLM_*`. Полный прогон 100 ReAct-задач долгий и тратит токены прокси.
+
+```bash
+make eval-test
+# make eval-test BUDGET=50000
+make score-test   # только пересчитать отчёт после уже сделанного прогона
+```
+
+Куда смотреть результаты:
+
+- **`out/eval_report.md`** — сводка + таблица по каждой задаче + fails
+- `out/eval_report.json` — тот же отчёт в JSON
+- `out/cost_journal.jsonl` — сырой журнал харнесса
 
 ## Структура репозитория
 
@@ -141,7 +160,8 @@ harness/
   solvers/react_solver.py    # единый солвер на все типы
 scripts/
   run_docker.sh calibrate.py fit_estimates.py
-  build_external_datasets.py
+  build_external_datasets.py score_pack.py
+Makefile                     # make eval-test
 task_packs/                  # zip + SOURCES.md
 tests/
 Dockerfile requirements.txt .env.example
