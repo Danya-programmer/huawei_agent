@@ -3,6 +3,8 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 task-dir/
+train-tasks/
+train-100/
 out/
 trajectories/
 *.jsonl
@@ -12,3 +14,6 @@ __MACOSX/
 *.egg-info/
 dist/
 build/
+.cache/
+task_packs/test-100/
+task_packs/train-3000/

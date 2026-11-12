@@ -1,0 +1,3 @@
+# Build-time only (dataset pack construction). Not installed into the contest Docker image.
+datasets>=2.19
+huggingface_hub>=0.23
