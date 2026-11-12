@@ -11,8 +11,8 @@ Original upstream dumps are **not** committed; the build script caches them unde
 | `math` | [DigitalLearningGmbH/MATH-lighteval](https://huggingface.co/datasets/DigitalLearningGmbH/MATH-lighteval) | see dataset card | problems with short extractable answers | medium if level ≤ 3, hard if level ≥ 4 |
 | `coding` | [google-research-datasets/mbpp](https://huggingface.co/datasets/google-research-datasets/mbpp) (`sanitized`) | CC-BY-4.0 | prompt + reference code + `test_list` | easy / medium by test count |
 | `coding` | [openai/openai_humaneval](https://huggingface.co/datasets/openai/openai_humaneval) | MIT | `prompt` + `canonical_solution` + `test` | medium / hard by test count |
-| `data_analysis` | [stanfordnlp/wikitablequestions](https://huggingface.co/datasets/stanfordnlp/wikitablequestions) (`refs/convert/parquet`, config `random-split-1`) | see dataset card | table + question + answer (parquet; script loaders unsupported in datasets≥4) | easy/med/hard by row count |
-| `search` | [hotpot_qa](https://huggingface.co/datasets/hotpot_qa) (`distractor`) | CC-BY-SA-4.0 | question + context paragraphs → `workspace/kb/*.md` | easy=`bridge`, hard=`comparison` (else medium) |
+| `data_analysis` | [stanfordnlp/wikitablequestions](https://huggingface.co/datasets/stanfordnlp/wikitablequestions) (`revision=refs/pr/4`, config `random-split-1`) | CC-BY-4.0 | table + question + answer (parquet PR; script loaders unsupported in datasets≥4) | easy/med/hard by row count |
+| `search` | [hotpotqa/hotpot_qa](https://huggingface.co/datasets/hotpotqa/hotpot_qa) (`distractor`) | CC-BY-SA-4.0 | question + context paragraphs → `workspace/kb/*.md` (namespaced id required by huggingface_hub) | easy=`bridge`, hard=`comparison` (else medium) |
 
 Unsolvable items (~20%) are **mutations** of the same upstream rows (missing evidence / broken schema / contradictory wording), not separate public “impossible” corpora.
 
@@ -20,6 +20,7 @@ Unsolvable items (~20%) are **mutations** of the same upstream rows (missing evi
 
 ```bash
 cd /home/dan/projects/huawei_agent_hacaton
+# Put HF_TOKEN=hf_... into .env (optional but recommended for Hub rate limits)
 uv venv .venv
 source .venv/bin/activate
 uv pip install --python .venv/bin/python -r requirements-datasets.txt

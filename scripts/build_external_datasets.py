@@ -198,6 +198,28 @@ def _ensure_datasets():
         ) from exc
 
 
+def _load_dotenv(path: Path | None = None) -> None:
+    """Load KEY=VAL from .env into os.environ (does not override existing)."""
+    env_path = path or (ROOT / ".env")
+    if not env_path.is_file():
+        return
+    for raw in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        key = key.strip()
+        val = val.strip().strip("'").strip('"')
+        if not key:
+            continue
+        os.environ.setdefault(key, val)
+    # HuggingFace Hub accepts either name.
+    token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+    if token:
+        os.environ.setdefault("HF_TOKEN", token)
+        os.environ.setdefault("HUGGING_FACE_HUB_TOKEN", token)
+
+
 def _hf_load(
     path: str,
     name: Optional[str] = None,
@@ -207,12 +229,16 @@ def _hf_load(
 ):
     from datasets import load_dataset
 
+    _load_dotenv()
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     os.environ.setdefault("HF_HOME", str(CACHE_DIR / "hf_home"))
     os.environ.setdefault("HF_DATASETS_CACHE", str(CACHE_DIR / "hf_datasets"))
     load_kwargs = dict(kwargs)
     if revision is not None:
         load_kwargs["revision"] = revision
+    token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+    if token and "token" not in load_kwargs:
+        load_kwargs["token"] = token
     if name is None:
         return load_dataset(path, split=split, **load_kwargs)
     return load_dataset(path, name, split=split, **load_kwargs)
@@ -556,94 +582,31 @@ def _normalize_wiki_answer(ans: Any) -> Optional[str]:
 
 def load_data_analysis_candidates(limit: int = 5000) -> list[Candidate]:
     out: list[Candidate] = []
-    # Prefer wikitablequestions; fall back to microsoft/wiki_table_questions style if needed
+    # datasets>=4 removed loading scripts. Parquet lives on PR branch refs/pr/4.
     ds = None
-    # #region agent log
-    def _dbg(hypothesis_id: str, message: str, data: dict) -> None:
-        import time
-
-        payload = {
-            "sessionId": "3abbf7",
-            "runId": "post-fix",
-            "hypothesisId": hypothesis_id,
-            "location": "build_external_datasets.py:load_data_analysis_candidates",
-            "message": message,
-            "data": data,
-            "timestamp": int(time.time() * 1000),
-        }
-        try:
-            with open(
-                "/home/dan/projects/huawei_agent_hacaton/.cursor/debug-3abbf7.log",
-                "a",
-                encoding="utf-8",
-            ) as _dbg_fh:
-                _dbg_fh.write(json.dumps(payload, ensure_ascii=False) + "\n")
-        except Exception:
-            pass
-
-    try:
-        import datasets as _ds_mod
-
-        _dbg(
-            "A",
-            "datasets_version",
-            {
-                "version": getattr(_ds_mod, "__version__", None),
-                "file": getattr(_ds_mod, "__file__", None),
-            },
-        )
-    except Exception as _ver_exc:  # noqa: BLE001
-        _dbg("A", "datasets_version_failed", {"error": repr(_ver_exc)})
-    # #endregion
-    # datasets>=4 removed loading scripts; use parquet conversion revision.
     source_name = "stanfordnlp/wikitablequestions"
     for path, kwargs in (
         (
             "stanfordnlp/wikitablequestions",
-            {"name": "random-split-1", "split": "train", "revision": "refs/convert/parquet"},
+            {"name": "random-split-1", "split": "train", "revision": "refs/pr/4"},
         ),
         (
             "stanfordnlp/wikitablequestions",
-            {"split": "train", "revision": "refs/convert/parquet"},
-        ),
-        (
-            "wikitablequestions",
-            {"name": "random-split-1", "split": "train", "revision": "refs/convert/parquet"},
+            {"split": "train", "revision": "refs/pr/4"},
         ),
     ):
         try:
             ds = _hf_load(path, **kwargs)
             source_name = path
-            # #region agent log
-            _dbg(
-                "D",
-                "parquet_load_ok",
-                {"path": path, "kwargs": {k: v for k, v in kwargs.items()}, "n": len(ds)},
-            )
-            # #endregion
             break
         except Exception as exc:  # noqa: BLE001
-            # #region agent log
-            _dbg(
-                "D",
-                "parquet_load_failed",
-                {
-                    "path": path,
-                    "kwargs": {k: v for k, v in kwargs.items()},
-                    "exc_type": type(exc).__name__,
-                    "exc": str(exc)[:400],
-                },
-            )
-            # #endregion
             print(f"WARN: load {path} {kwargs} failed: {exc}")
-    # #region agent log
-    _dbg("D", "after_all_attempts", {"ds_is_none": ds is None, "source_name": source_name})
-    # #endregion
     if ds is None:
         raise RuntimeError(
             "Could not load WikiTableQuestions parquet "
-            "(tried stanfordnlp/wikitablequestions@refs/convert/parquet). "
-            "datasets>=4 no longer supports the legacy loading script."
+            "(tried stanfordnlp/wikitablequestions@refs/pr/4). "
+            "datasets>=4 no longer supports the legacy loading script. "
+            "Set HF_TOKEN in .env for higher Hub rate limits."
         )
 
     for i, row in enumerate(ds):
@@ -690,7 +653,25 @@ def load_data_analysis_candidates(limit: int = 5000) -> list[Candidate]:
 
 def load_search_candidates(limit: int = 5000) -> list[Candidate]:
     out: list[Candidate] = []
-    ds = _hf_load("hotpot_qa", name="distractor", split="train")
+    ds = None
+    # huggingface_hub requires namespace/name (bare "hotpot_qa" → HfUriError).
+    for path, kwargs in (
+        ("hotpotqa/hotpot_qa", {"name": "distractor", "split": "train"}),
+        (
+            "hotpotqa/hotpot_qa",
+            {"name": "distractor", "split": "train", "revision": "refs/convert/parquet"},
+        ),
+    ):
+        try:
+            ds = _hf_load(path, **kwargs)
+            break
+        except Exception as exc:  # noqa: BLE001
+            print(f"WARN: load {path} {kwargs} failed: {exc}")
+    if ds is None:
+        raise RuntimeError(
+            "Could not load HotpotQA (tried hotpotqa/hotpot_qa distractor). "
+            "Bare id 'hotpot_qa' is invalid for current huggingface_hub."
+        )
     for i, row in enumerate(ds):
         question = str(row.get("question") or "").strip()
         answer = str(row.get("answer") or "").strip()
@@ -1073,10 +1054,15 @@ def main() -> None:
     p.add_argument("--test-only", action="store_true", help="Build only the test pack")
     args = p.parse_args()
 
+    _load_dotenv()
     _ensure_datasets()
     args.out.mkdir(parents=True, exist_ok=True)
+    if os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN"):
+        print("HF_TOKEN detected (authenticated Hub downloads).")
+    else:
+        print("WARN: no HF_TOKEN in env/.env — Hub rate limits may be low.")
 
-    print("Loading upstream pools (cached under .cache/datasets)...")
+    print("Loading upstream pools (cached under .cache/hf_datasets)...")
     pools = build_pools(args.seed)
     for t, items in pools.items():
         if len(items) < args.train_n // 4 + args.test_n // 4:
