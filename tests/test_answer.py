@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import unittest
 
-from harness.answer import looks_like_garbage, sanitize_answer
+from harness.domain.answer import looks_like_garbage, sanitize_answer
 
 
 class TestAnswerSanitize(unittest.TestCase):

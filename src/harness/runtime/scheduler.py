@@ -1,4 +1,4 @@
-"""Two-phase budget-aware scheduler: cheap first, coding/react later."""
+"""Budget-aware scheduler: one list ordered by reward per expected token."""
 
 from __future__ import annotations
 
@@ -8,10 +8,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Optional
 
-from harness.io import CostJournal, atomic_write_answer, discover_tasks
-from harness.solver import Solver, SolverRegistry
-from harness.triage import TaskProfile, triage
-from harness.types import Result, Status, Task
+from harness.infra.io import CostJournal, atomic_write_answer, discover_tasks
+from harness.agents.solver import Solver, SolverRegistry
+from harness.runtime.triage import TaskProfile, triage
+from harness.domain.types import Result, Status, Task
 
 # Keep concurrency low to avoid proxy 429s; override via MAX_WORKERS.
 DEFAULT_MAX_WORKERS = 2
@@ -86,40 +86,39 @@ class BudgetLedger:
 
 
 def plan(tasks: list[Task]) -> PlannedWork:
-    """Triage all tasks into skip / phase A (cheap) / phase B (coding+fallback)."""
+    """Triage, then order runnable tasks by priority. phase_b stays empty.
+
+    Coding concurrency is a semaphore in the runner, not a reason to go later.
+    """
     profiles: dict[str, TaskProfile] = {}
     skips: list[Task] = []
-    phase_a: list[Task] = []
-    phase_b: list[Task] = []
+    runnable: list[Task] = []
 
     for task in tasks:
         profile = triage(task)
         profiles[task.task_id] = profile
         if profile.lane == "skip" or not profile.feasible:
             skips.append(task)
-        elif profile.lane == "react":
-            # Short ReAct (math / data_analysis / search) first.
-            phase_a.append(task)
         else:
-            # coding (longer ReAct)
-            phase_b.append(task)
+            runnable.append(task)
 
-    phase_a.sort(
-        key=lambda t: (profiles[t.task_id].expected_cost, -t.reward),
-    )
-    phase_b.sort(
-        key=lambda t: -(t.reward / max(profiles[t.task_id].expected_cost, 1)),
+    runnable.sort(
+        key=lambda t: (
+            -profiles[t.task_id].priority,
+            -t.reward,
+            t.task_id,
+        ),
     )
     return PlannedWork(
         profiles=profiles,
         skips=skips,
-        phase_a=phase_a,
-        phase_b=phase_b,
+        phase_a=runnable,
+        phase_b=[],
     )
 
 
 class SimpleScheduler:
-    """Phase A cheap (≤5 workers), then phase B coding/react (concurrency ≤2)."""
+    """Run the priority list. Coding shares the concurrency cap, not a later phase."""
 
     def __init__(
         self,

@@ -7,8 +7,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from harness.io import discover_tasks, load_task, resolve_tasks_dir
-from harness.types import TaskType
+from harness.infra.io import discover_tasks, load_task, resolve_tasks_dir
+from harness.domain.types import TaskType
 
 
 class TestLoadTask(unittest.TestCase):

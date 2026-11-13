@@ -5,8 +5,8 @@ from __future__ import annotations
 import math
 import unittest
 
-from harness.cost import compute_call_cost, cost_from_usage
-from harness.types import TokenUsage
+from harness.infra.cost import compute_call_cost, cost_from_usage
+from harness.domain.types import TokenUsage
 
 
 class TestComputeCallCost(unittest.TestCase):

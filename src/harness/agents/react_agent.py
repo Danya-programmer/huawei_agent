@@ -10,11 +10,11 @@ import uuid
 from pathlib import Path
 from typing import Any, Awaitable, Optional, TypeVar
 
-from harness.answer import sanitize_answer
-from harness.cost import cost_from_usage
-from harness.http_retry import call_with_retries, error_is_rate_limit
-from harness.types import Result, Status, Task, TokenUsage, resolve_model
-from harness.usage import capture_llm_usage, extract_usage, sum_usage
+from harness.domain.answer import sanitize_answer
+from harness.infra.cost import cost_from_usage
+from harness.infra.http_retry import call_with_retries, error_is_rate_limit
+from harness.domain.types import Result, Status, Task, TokenUsage, resolve_model
+from harness.infra.usage import capture_llm_usage, extract_usage, sum_usage
 
 
 async def _agent_invoke(agent: Any, payload: dict[str, Any]) -> tuple[Any, TokenUsage]:
@@ -276,7 +276,7 @@ def _openai_chat_answer(task: Task, *, model_name: str) -> Result:
     import urllib.error
     import urllib.request
 
-    from harness.cost import compute_call_cost
+    from harness.infra.cost import compute_call_cost
 
     base = (_env("LLM_BASE_URL") or "").rstrip("/")
     key = _env("LLM_API_KEY") or ""

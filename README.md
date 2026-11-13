@@ -106,7 +106,7 @@ docker run --rm \
   /app/run_agent.py --tasks-dir /data/tasks
 ```
 
-База: `python:3.11.10-slim-bookworm`, зависимость: `openjiuwen==0.1.19`.  
+База: `python:3.13.18-slim-bookworm` (openjiuwen не поддерживает 3.14), зависимости: `openjiuwen==0.1.20.post3`, `scikit-learn==1.9.1`.  
 Образ собирается без extras; runtime-загрузки запрещены. Лимит размера образа — 4GB.
 
 ## Наборы задач
@@ -148,6 +148,8 @@ make eval-test
 make score-test   # только пересчитать отчёт после уже сделанного прогона
 ```
 
+`score-test` оценивает coding как жюри: гоняет `python3 test_mylib.py` в `workspace/` (одного `DONE` в `answer.txt` недостаточно). Остальные типы — сверка `answer.txt` с expected (кавычки нормализуются).
+
 Куда смотреть результаты:
 
 - **`out/eval_report.md`** — сводка + таблица по каждой задаче + fails
@@ -157,22 +159,22 @@ make score-test   # только пересчитать отчёт после у
 ## Структура репозитория
 
 ```
-run_agent.py                 # entrypoint
-harness/
-  types.py cost.py usage.py
-  tasks.py io.py
-  estimate.py triage.py scheduler.py
-  react_agent.py             # openJiuwen ReAct + chat fallback
-  solvers/react_solver.py    # единый солвер на все типы
-scripts/
-  run_docker.sh calibrate.py fit_estimates.py
-  build_external_datasets.py score_pack.py
-Makefile                     # make eval-test
-task_packs/                  # zip + SOURCES.md
+run_agent.py                 # jury entrypoint (/app/run_agent.py)
+src/harness/                 # src-layout
+  domain/ infra/ runtime/ agents/
+scripts/                     # run_docker, score_pack, build packs, calibrate
+artifacts/models/            # solvability.joblib, tau.json, cost.joblib
+notebooks/                   # train_solvability / train_cost (Kaggle; вне образа)
+docs/                        # регламент, статьи
 tests/
-Dockerfile requirements.txt .env.example
+task_packs/                  # zip + SOURCES.md (HF-кэш → .cache/, не datasets/)
+Dockerfile pyproject.toml Makefile
 ```
+
+Веса: один каталог `artifacts/models/`. В образе Docker копируется в `/app/models`.
+Локально: `PYTHONPATH=src` (Makefile) или `pip install -e .`.
+Не создавай папку `datasets/` в корне — она перекрывает пакет HuggingFace `datasets`.
 
 ## Материалы
 
-См. [`полезные статьи.md`](полезные%20статьи.md) и [`Регламент соревнования.md`](Регламент%20соревнования.md).
+См. [`docs/полезные статьи.md`](docs/полезные%20статьи.md) и [`docs/Регламент соревнования.md`](docs/Регламент%20соревнования.md).

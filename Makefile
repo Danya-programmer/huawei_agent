@@ -6,6 +6,7 @@ BUDGET ?=
 MAX_WORKERS ?= 2
 export OUT
 export MAX_WORKERS
+export PYTHONPATH := src$(if $(PYTHONPATH),:$(PYTHONPATH))
 
 .PHONY: unpack-test clean-answers clean-journal run-test score-test eval-test unpack-abstention docker-test
 

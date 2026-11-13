@@ -1,5 +1,6 @@
 .venv/
 __pycache__/
+**/__pycache__/
 *.py[cod]
 .pytest_cache/
 task-dir/
@@ -15,6 +16,9 @@ __MACOSX/
 dist/
 build/
 .cache/
+# empty/root HF cache dumps — never commit; use .cache/hf_datasets via build script
+/datasets/
+/models/
 task_packs/test-100/
 task_packs/train-3000/
 task_packs/abstention-pack/

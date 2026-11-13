@@ -18,9 +18,10 @@ from pathlib import Path
 from typing import Any, Optional
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT))
 
-from harness.estimate import (  # noqa: E402
+from harness.runtime.estimate import (  # noqa: E402
     COST_BANDS,
     COST_CODING_REACT,
     COST_CODING_REACT_REASON,
@@ -28,7 +29,7 @@ from harness.estimate import (  # noqa: E402
     COST_SKIP,
 )
 
-ESTIMATE_PATH = ROOT / "harness" / "estimate.py"
+ESTIMATE_PATH = ROOT / "src" / "harness" / "runtime" / "estimate.py"
 
 _BAND_KEYS = {
     "skip": "COST_SKIP",
@@ -167,7 +168,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument(
         "--write",
         action="store_true",
-        help="Update harness/estimate.py COST_* constants from medians",
+        help="Update src/harness/runtime/estimate.py COST_* constants from medians",
     )
     args = parser.parse_args(argv)
 

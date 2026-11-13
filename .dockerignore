@@ -6,8 +6,11 @@ __pycache__
 .pytest_cache
 task-dir
 task-dir.zip
+task_packs
 train-tasks
 trajectories
+out
+notebooks
 __MACOSX
 *.md
 !README.md
@@ -15,3 +18,7 @@ __MACOSX
 Регламент соревнования.md
 .cursor
 agent-transcripts
+# ship only artifacts/models weights; ignore other artifact junk if added later
+artifacts/*
+!artifacts/models/
+!artifacts/models/**

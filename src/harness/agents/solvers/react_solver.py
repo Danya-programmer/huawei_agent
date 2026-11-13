@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from harness.react_agent import CODING_SYSTEM_PROMPT, run_coding_react, run_task_react
-from harness.types import Result, Task, TaskType
+from harness.agents.react_agent import CODING_SYSTEM_PROMPT, run_coding_react, run_task_react
+from harness.domain.types import Result, Task, TaskType
 
 
 class ReactSolver:
@@ -26,6 +26,6 @@ def _prompt_for(task_type: TaskType) -> str:
     if task_type == TaskType.CODING:
         return CODING_SYSTEM_PROMPT
     # General prompt already covers math / csv / search.
-    from harness.react_agent import GENERAL_SYSTEM_PROMPT
+    from harness.agents.react_agent import GENERAL_SYSTEM_PROMPT
 
     return GENERAL_SYSTEM_PROMPT

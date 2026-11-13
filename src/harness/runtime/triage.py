@@ -1,12 +1,13 @@
-"""Lightweight triage: cost bands for ReAct-only scheduling (no auto-solvers)."""
+"""Triage: structural skips and expected cost for budget-aware scheduling."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Literal, Optional
 
-from harness.estimate import COST_CODING_REACT, COST_SHORT_REACT, COST_SKIP
-from harness.types import Task, TaskType
+from harness.runtime.estimate import COST_SKIP
+from harness.runtime.rank import assess
+from harness.domain.types import Task, TaskType
 
 Lane = Literal["react", "coding", "skip"]
 
@@ -23,10 +24,11 @@ class TaskProfile:
     cost_hi: int
     expected_cost: int
     lane: Lane
+    priority: float = 0.0
 
 
 def triage(task: Task) -> TaskProfile:
-    """Put every known task on the ReAct path; only unknown types are skipped."""
+    """Score one task. Math always runs. Other types skip on a structural fail or p < tau."""
     if task.task_type not in {
         TaskType.MATH,
         TaskType.DATA_ANALYSIS,
@@ -42,25 +44,28 @@ def triage(task: Task) -> TaskProfile:
             cost_hi=COST_SKIP,
             expected_cost=COST_SKIP,
             lane="skip",
+            priority=0.0,
         )
 
+    estimate = assess(task)
     difficulty = _difficulty_proxy(task)
-    if task.task_type == TaskType.CODING:
-        cost = COST_CODING_REACT
-        lane: Lane = "coding"
+    if estimate.skip:
+        lane: Lane = "skip"
+    elif task.task_type == TaskType.CODING:
+        lane = "coding"
     else:
-        cost = COST_SHORT_REACT
         lane = "react"
 
     return TaskProfile(
         task_type=task.task_type,
         difficulty_proxy=difficulty,
-        feasible=True,
-        fail_reason=None,
-        cost_lo=cost,
-        cost_hi=cost,
-        expected_cost=cost,
+        feasible=not estimate.skip,
+        fail_reason=estimate.fail_reason,
+        cost_lo=estimate.cost_hat,
+        cost_hi=estimate.cost_hat,
+        expected_cost=estimate.cost_hat,
         lane=lane,
+        priority=estimate.priority,
     )
 
 

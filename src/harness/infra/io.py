@@ -9,8 +9,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional, TextIO
 
-from harness.tasks import discover_tasks, load_task, resolve_tasks_dir
-from harness.types import Result, Status, Task
+from harness.domain.tasks import discover_tasks, load_task, resolve_tasks_dir
+from harness.domain.types import Result, Status, Task
 
 __all__ = [
     "CostJournal",

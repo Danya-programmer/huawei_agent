@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from typing import Any, AsyncIterator, Optional
 
-from harness.types import TokenUsage
+from harness.domain.types import TokenUsage
 
 _active_bucket: ContextVar[Optional[list[TokenUsage]]] = ContextVar(
     "hack_llm_usage_bucket", default=None

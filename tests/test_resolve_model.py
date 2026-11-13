@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import unittest
 
-from harness.types import DEFAULT_MODEL, resolve_model
+from harness.domain.types import DEFAULT_MODEL, resolve_model
 
 
 class TestResolveModel(unittest.TestCase):

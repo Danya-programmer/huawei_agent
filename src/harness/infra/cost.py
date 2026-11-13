@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 
-from harness.types import TokenUsage
+from harness.domain.types import TokenUsage
 
 
 def compute_call_cost(

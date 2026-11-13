@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 from typing import Any, Optional
 
-from harness.types import Task, TaskType
+from harness.domain.types import Task, TaskType
 
 
 REQUIRED_TASK_FIELDS = ("task_id", "task_type", "instruction", "reward")

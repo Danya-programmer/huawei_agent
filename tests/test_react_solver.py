@@ -6,8 +6,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from harness.solvers import ReactSolver, build_default_registry
-from harness.types import Result, Status, Task, TaskType
+from harness.agents.solvers import ReactSolver, build_default_registry
+from harness.domain.types import Result, Status, Task, TaskType
 
 
 class TestReactSolver(unittest.TestCase):
@@ -28,7 +28,7 @@ class TestReactSolver(unittest.TestCase):
             task_dir=Path("."),
         )
         with mock.patch(
-            "harness.solvers.react_solver.run_task_react", return_value=fake
+            "harness.agents.solvers.react_solver.run_task_react", return_value=fake
         ) as react:
             out = solver.solve(task)
         react.assert_called_once()
@@ -46,7 +46,7 @@ class TestReactSolver(unittest.TestCase):
             task_dir=Path("."),
         )
         with mock.patch(
-            "harness.solvers.react_solver.run_coding_react", return_value=fake
+            "harness.agents.solvers.react_solver.run_coding_react", return_value=fake
         ) as react:
             out = solver.solve(task)
         react.assert_called_once()
