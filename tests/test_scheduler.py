@@ -11,6 +11,8 @@ from harness.runtime.scheduler import SimpleScheduler
 from harness.agents.solver import SolverRegistry
 from harness.domain.types import Result, Status, Task, TaskType
 
+import rank_isolation
+
 
 class _EchoSolver:
     def solve(self, task: Task) -> Result:
@@ -31,7 +33,7 @@ _MATH_OK = (
 
 class TestScheduler(unittest.TestCase):
     def test_writes_answer_on_solved(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
+        with rank_isolation.no_rank_models(), tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             task_dir = root / "math_x"
             task_dir.mkdir()
@@ -63,7 +65,7 @@ class TestScheduler(unittest.TestCase):
                 calls.append(task.task_id)
                 return Result(status=Status.SOLVED, answer="x", cost=0)
 
-        with tempfile.TemporaryDirectory() as tmp:
+        with rank_isolation.no_rank_models(), tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             task_dir = root / "csv_any"
             work = task_dir / "workspace"

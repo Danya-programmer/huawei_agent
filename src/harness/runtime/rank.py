@@ -71,21 +71,21 @@ def clear_cache() -> None:
 
 
 def assess(task: Any, *, models: Optional[Path] = None) -> RankEstimate:
-    """p=1 for math. Skip on a structural fail or on p < tau for the other types."""
+    """Skip on structural fail (incl. math cue phrases). Else p=1 for math, or p < tau."""
     feats = extract(task)
     task_type = _type_name(task)
     hard = structural_skip_reason(task, feats)
     bundle = _bundle(models if models is not None else models_dir())
     cost = _predict_cost(bundle, task, feats)
 
-    if task_type == "math":
-        p = 1.0
-        skip = False
-        reason = None
-    elif hard:
+    if hard:
         p = 0.0
         skip = True
         reason = hard
+    elif task_type == "math":
+        p = 1.0
+        skip = False
+        reason = None
     else:
         p = _predict_p(bundle, task)
         if p < bundle.tau:

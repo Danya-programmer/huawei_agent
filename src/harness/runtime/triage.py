@@ -28,7 +28,7 @@ class TaskProfile:
 
 
 def triage(task: Task) -> TaskProfile:
-    """Score one task. Math always runs. Other types skip on a structural fail or p < tau."""
+    """Score one task via ``assess`` (structural / math cues / p < tau)."""
     if task.task_type not in {
         TaskType.MATH,
         TaskType.DATA_ANALYSIS,
