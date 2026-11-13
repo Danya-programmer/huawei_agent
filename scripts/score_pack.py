@@ -3,6 +3,9 @@
 
 Writes out/eval_report.json + out/eval_report.md (per-task table + fails).
 Does not call the LLM.
+
+Coding tasks are scored like the jury: by running ``python3 test_mylib.py``
+in the task workspace (sources), not by matching DONE in answer.txt alone.
 """
 
 from __future__ import annotations
@@ -10,6 +13,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import subprocess
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Optional
@@ -18,9 +22,16 @@ from typing import Any, Optional
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def _strip_outer_quotes(s: str) -> str:
+    s = s.strip()
+    if len(s) >= 2 and s[0] == s[-1] and s[0] in "\"'":
+        return s[1:-1].strip()
+    return s
+
+
 def _norm(text: str, expected: str) -> str:
-    s = (text or "").strip()
-    exp = (expected or "").strip()
+    s = _strip_outer_quotes(text or "")
+    exp = _strip_outer_quotes(expected or "")
     if re.fullmatch(r"-?\d+(\.\d+)?", exp.replace(",", "")):
         return s.replace(",", "").replace(" ", "")
     return s
@@ -29,8 +40,12 @@ def _norm(text: str, expected: str) -> str:
 def _read_answer(task_dir: Path) -> Optional[str]:
     for rel in ("answer.txt", "workspace/answer.txt"):
         p = task_dir / rel
-        if p.is_file():
+        if not p.is_file():
+            continue
+        try:
             return p.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
     return None
 
 
@@ -73,6 +88,57 @@ def _verdict(solvable: bool, expected: str, got: Optional[str]) -> str:
     return "wrong"
 
 
+def _run_coding_tests(workspace: Path, *, timeout: float = 30.0) -> tuple[bool, str]:
+    """Run ``python3 test_mylib.py`` in workspace; return (ok, detail)."""
+    test_path = workspace / "test_mylib.py"
+    if not workspace.is_dir() or not test_path.is_file():
+        return False, "missing_workspace_or_tests"
+    try:
+        proc = subprocess.run(
+            ["python3", "test_mylib.py"],
+            cwd=str(workspace),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return False, "timeout"
+    except OSError as exc:
+        return False, f"os_error:{exc}"
+    detail = ((proc.stdout or "") + (proc.stderr or "")).strip()
+    if len(detail) > 400:
+        detail = detail[:400]
+    return proc.returncode == 0, detail
+
+
+def _score_coding(
+    task_dir: Path,
+    *,
+    solvable: bool,
+    expected: str,
+    got: Optional[str],
+) -> tuple[str, Optional[bool], str]:
+    """Jury-like coding verdict: sources must pass workspace tests.
+
+    Returns (verdict, tests_ok, tests_detail).
+    """
+    workspace = task_dir / "workspace"
+    tests_ok, detail = _run_coding_tests(workspace)
+    has_answer = got is not None and bool(str(got).strip())
+
+    if not solvable or expected == "UNSOLVABLE":
+        if tests_ok or has_answer:
+            return "unsolvable_fp", tests_ok, detail
+        return "unsolvable_ok", tests_ok, detail
+
+    if tests_ok:
+        return "correct", True, detail
+    if not has_answer:
+        return "missing", False, detail
+    return "wrong", False, detail
+
+
 def _esc(cell: Any) -> str:
     s = "" if cell is None else str(cell)
     return s.replace("|", "\\|").replace("\n", " ").strip()
@@ -101,10 +167,17 @@ def score_pack(
         solvable = bool(row.get("solvable"))
         got_raw = _read_answer(task_dir)
         got = got_raw.strip() if got_raw is not None else None
-        v = _verdict(solvable, expected, got)
-        counts[v] += 1
         ttype = str(row.get("task_type") or "?")
         diff = str(row.get("difficulty") or "?")
+        tests_ok: Optional[bool] = None
+        tests_detail = ""
+        if ttype == "coding":
+            v, tests_ok, tests_detail = _score_coding(
+                task_dir, solvable=solvable, expected=expected, got=got
+            )
+        else:
+            v = _verdict(solvable, expected, got)
+        counts[v] += 1
         by_type[ttype][v] += 1
         by_diff[diff][v] += 1
         j = journal.get(tid, {})
@@ -131,6 +204,8 @@ def score_pack(
                 "reward": reward,
                 "source": row.get("source"),
                 "fail_mode": row.get("fail_mode"),
+                "tests_ok": tests_ok,
+                "tests_detail": tests_detail,
             }
         )
 
@@ -175,10 +250,12 @@ def score_pack(
     lines.append("\n## Per-task\n")
     lines.append(
         "| task_id | type | difficulty | solvable | verdict | expected | got | "
-        "harness_status | cost | model | reward |"
+        "tests_ok | harness_status | cost | model | reward |"
     )
-    lines.append("|---|---|---|---|---|---|---|---|---|---|---|")
+    lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|")
     for t in tasks:
+        tok = t.get("tests_ok")
+        tok_cell = "" if tok is None else ("yes" if tok else "no")
         lines.append(
             "| "
             + " | ".join(
@@ -190,6 +267,7 @@ def score_pack(
                     _esc(t["verdict"]),
                     _esc(t["expected"])[:40],
                     _esc(t["got"])[:40],
+                    _esc(tok_cell),
                     _esc(t["harness_status"]),
                     _esc(t["cost"]),
                     _esc(t["model"]),
@@ -205,9 +283,12 @@ def score_pack(
         lines.append("_none_\n")
     else:
         for t in fails:
+            extra = ""
+            if t.get("tests_ok") is not None:
+                extra = f" tests_ok={t['tests_ok']}"
             lines.append(
                 f"- `{t['task_id']}` [{t['verdict']}] expected=`{t['expected']}` "
-                f"got=`{t['got']}` status=`{t['harness_status']}` cost={t['cost']}"
+                f"got=`{t['got']}` status=`{t['harness_status']}` cost={t['cost']}{extra}"
             )
 
     out_md.write_text("\n".join(lines) + "\n", encoding="utf-8")

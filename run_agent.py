@@ -14,14 +14,16 @@ from pathlib import Path
 
 # Allow ``python run_agent.py`` from the repo root without installing the package.
 _ROOT = Path(__file__).resolve().parent
-if str(_ROOT) not in sys.path:
-    sys.path.insert(0, str(_ROOT))
+_SRC = _ROOT / "src"
+for _p in (_SRC, _ROOT):
+    if str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
 
 import os  # noqa: E402
 
-from harness.io import CostJournal, resolve_tasks_dir  # noqa: E402
-from harness.scheduler import run_tasks  # noqa: E402
-from harness.solvers import build_default_registry  # noqa: E402
+from harness.infra.io import CostJournal, resolve_tasks_dir  # noqa: E402
+from harness.runtime.scheduler import run_tasks  # noqa: E402
+from harness.agents.solvers import build_default_registry  # noqa: E402
 
 
 def _load_dotenv(path: Path | None = None) -> None:
@@ -59,7 +61,7 @@ def main(argv: list[str] | None = None) -> int:
 
     solvers = build_default_registry()
     journal = CostJournal.from_env()
-    max_workers = int(os.environ.get("MAX_WORKERS", "5") or "5")
+    max_workers = int(os.environ.get("MAX_WORKERS", "2") or "2")
 
     summary = run_tasks(
         tasks_dir,

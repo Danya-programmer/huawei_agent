@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -35,7 +36,21 @@ class ModelName(str, Enum):
     QWEN36_35B_NOREASON = "qwen3.6-35b-a3b-noreason"
 
 
-DEFAULT_MODEL = ModelName.QWEN36_35B_NOREASON
+# Contest default: cheaper noreason 3.8; override with LLM_MODEL.
+DEFAULT_MODEL = ModelName.QWEN38_27B_NOREASON
+
+_ALLOWED_MODELS = {m.value for m in ModelName}
+
+
+def resolve_model(explicit: Optional[str] = None) -> str:
+    """Pick proxy model: explicit arg → ``LLM_MODEL`` env → ``DEFAULT_MODEL``."""
+    raw = (explicit or os.environ.get("LLM_MODEL") or "").strip()
+    if not raw:
+        return DEFAULT_MODEL.value
+    if raw not in _ALLOWED_MODELS:
+        allowed = ", ".join(sorted(_ALLOWED_MODELS))
+        raise ValueError(f"unknown LLM_MODEL={raw!r}; allowed: {allowed}")
+    return raw
 
 
 @dataclass(frozen=True)

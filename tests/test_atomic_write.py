@@ -7,8 +7,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from harness.io import CostJournal, atomic_write_answer
-from harness.types import Status
+from harness.infra.io import CostJournal, atomic_write_answer
+from harness.domain.types import Status
 
 
 class TestAtomicWriteAnswer(unittest.TestCase):

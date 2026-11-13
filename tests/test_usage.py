@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import unittest
 
-from harness.cost import cost_from_usage
-from harness.usage import extract_usage, usage_from_mapping
+from harness.infra.cost import cost_from_usage
+from harness.infra.usage import extract_usage, usage_from_mapping
 
 
 class TestUsage(unittest.TestCase):

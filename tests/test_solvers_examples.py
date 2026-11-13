@@ -5,8 +5,8 @@ from __future__ import annotations
 import os
 import unittest
 
-from harness.solvers import ReactSolver, build_default_registry
-from harness.types import TaskType
+from harness.agents.solvers import ReactSolver, build_default_registry
+from harness.domain.types import TaskType
 
 
 class TestReactOnlyRegistry(unittest.TestCase):

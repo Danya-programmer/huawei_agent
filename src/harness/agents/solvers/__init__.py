@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from harness.solver import SolverRegistry
-from harness.solvers.react_solver import ReactSolver
-from harness.types import TaskType
+from harness.agents.solver import SolverRegistry
+from harness.agents.solvers.react_solver import ReactSolver
+from harness.domain.types import TaskType
 
 
 def build_default_registry() -> SolverRegistry:

@@ -3,9 +3,12 @@ PYTHON ?= $(shell test -x .venv/bin/python && echo .venv/bin/python || echo pyth
 TASKS ?= task_packs/test-100
 OUT ?= out
 BUDGET ?=
+MAX_WORKERS ?= 2
 export OUT
+export MAX_WORKERS
+export PYTHONPATH := src$(if $(PYTHONPATH),:$(PYTHONPATH))
 
-.PHONY: unpack-test clean-answers clean-journal run-test score-test eval-test unpack-abstention
+.PHONY: unpack-test clean-answers clean-journal run-test score-test eval-test unpack-abstention docker-test
 
 unpack-test:
 	unzip -qo task_packs/test-100.zip -d task_packs
@@ -27,7 +30,7 @@ clean-journal:
 run-test:
 	@mkdir -p $(OUT)
 	@if [ -n "$(BUDGET)" ]; then export BUDGET="$(BUDGET)"; fi; \
-	OUT=$(OUT) $(PYTHON) run_agent.py --tasks-dir $(TASKS)
+	OUT=$(OUT) MAX_WORKERS=$(MAX_WORKERS) $(PYTHON) run_agent.py --tasks-dir $(TASKS)
 
 score-test:
 	@mkdir -p $(OUT)
@@ -40,3 +43,8 @@ score-test:
 # Full local eval: unpack → wipe answers → fresh journal → run → score
 eval-test: unpack-test clean-answers clean-journal run-test score-test
 	@echo "Open $(OUT)/eval_report.md for per-task results."
+
+# Canonical Docker eval (jury-like flags via scripts/run_docker.sh).
+docker-test: unpack-test clean-answers clean-journal
+	sudo TASKS="$(CURDIR)/$(TASKS)" OUT="$(CURDIR)/$(OUT)" ./scripts/run_docker.sh
+	@$(MAKE) score-test TASKS=$(TASKS) OUT=$(OUT)

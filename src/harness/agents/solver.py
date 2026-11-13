@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Optional, Protocol, runtime_checkable
 
-from harness.types import Result, Status, Task, TaskType
+from harness.domain.types import Result, Status, Task, TaskType
 
 
 @runtime_checkable

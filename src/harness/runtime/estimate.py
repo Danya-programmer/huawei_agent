@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from harness.types import Task, TaskType
+from harness.domain.types import Task, TaskType
 
 # Output-token cost bands (medians; fit_estimates.py can refresh from journal).
 COST_SKIP = 0
@@ -60,7 +60,7 @@ def feature_adjust(task: Task) -> float:
 def expected_cost(task: Task) -> int:
     """Prefer triage band; fall back to type defaults."""
     try:
-        from harness.triage import triage
+        from harness.runtime.triage import triage
 
         return int(triage(task).expected_cost)
     except Exception:  # noqa: BLE001

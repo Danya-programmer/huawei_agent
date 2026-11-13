@@ -1,4 +1,4 @@
-"""Two-phase budget-aware scheduler: cheap first, coding/react later."""
+"""Budget-aware scheduler: one list ordered by reward per expected token."""
 
 from __future__ import annotations
 
@@ -8,14 +8,14 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Optional
 
-from harness.io import CostJournal, atomic_write_answer, discover_tasks
-from harness.solver import Solver, SolverRegistry
-from harness.triage import TaskProfile, triage
-from harness.types import Result, Status, Task
+from harness.infra.io import CostJournal, atomic_write_answer, discover_tasks
+from harness.agents.solver import Solver, SolverRegistry
+from harness.runtime.triage import TaskProfile, triage
+from harness.domain.types import Result, Status, Task
 
-# Cheap/deterministic pool size; coding/react hard-capped separately.
-DEFAULT_MAX_WORKERS = 5
-CODING_REACT_CONCURRENCY = 2
+# Keep concurrency low to avoid proxy 429s; override via MAX_WORKERS.
+DEFAULT_MAX_WORKERS = 2
+CODING_REACT_CONCURRENCY = 1
 
 
 @dataclass
@@ -86,40 +86,39 @@ class BudgetLedger:
 
 
 def plan(tasks: list[Task]) -> PlannedWork:
-    """Triage all tasks into skip / phase A (cheap) / phase B (coding+fallback)."""
+    """Triage, then order runnable tasks by priority. phase_b stays empty.
+
+    Coding concurrency is a semaphore in the runner, not a reason to go later.
+    """
     profiles: dict[str, TaskProfile] = {}
     skips: list[Task] = []
-    phase_a: list[Task] = []
-    phase_b: list[Task] = []
+    runnable: list[Task] = []
 
     for task in tasks:
         profile = triage(task)
         profiles[task.task_id] = profile
         if profile.lane == "skip" or not profile.feasible:
             skips.append(task)
-        elif profile.lane == "react":
-            # Short ReAct (math / data_analysis / search) first.
-            phase_a.append(task)
         else:
-            # coding (longer ReAct)
-            phase_b.append(task)
+            runnable.append(task)
 
-    phase_a.sort(
-        key=lambda t: (profiles[t.task_id].expected_cost, -t.reward),
-    )
-    phase_b.sort(
-        key=lambda t: -(t.reward / max(profiles[t.task_id].expected_cost, 1)),
+    runnable.sort(
+        key=lambda t: (
+            -profiles[t.task_id].priority,
+            -t.reward,
+            t.task_id,
+        ),
     )
     return PlannedWork(
         profiles=profiles,
         skips=skips,
-        phase_a=phase_a,
-        phase_b=phase_b,
+        phase_a=runnable,
+        phase_b=[],
     )
 
 
 class SimpleScheduler:
-    """Phase A cheap (≤5 workers), then phase B coding/react (concurrency ≤2)."""
+    """Run the priority list. Coding shares the concurrency cap, not a later phase."""
 
     def __init__(
         self,
@@ -237,12 +236,10 @@ class SimpleScheduler:
                     task, result = fut.result()
                     finalize(task, result)
 
-        run_phase(planned.phase_a, workers=self.max_workers, use_coding_cap=False)
-        run_phase(
-            planned.phase_b,
-            workers=min(self.max_workers, self.coding_concurrency),
-            use_coding_cap=True,
-        )
+        # Cap both phases — every task is ReAct and hits the same proxy.
+        react_workers = min(self.max_workers, self.coding_concurrency)
+        run_phase(planned.phase_a, workers=react_workers, use_coding_cap=True)
+        run_phase(planned.phase_b, workers=react_workers, use_coding_cap=True)
 
         summary.total_cost = self.journal.total_cost()
         return summary
@@ -296,8 +293,11 @@ def _budget_from_env() -> Optional[int]:
 
 
 def _looks_like_proxy_failure(result: Result) -> bool:
+    """Hard stop only on auth/quota death — not on per-call 429 (those are retried)."""
     err = (result.error or "").lower()
+    if "429" in err or "too many requests" in err:
+        return False
     return any(
         needle in err
-        for needle in ("budget", "proxy", "429", "401", "403", "quota", "exhausted")
+        for needle in ("401", "403", "quota exhausted", "budget_exhausted", "proxy")
     )

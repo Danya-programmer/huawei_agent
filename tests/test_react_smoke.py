@@ -11,10 +11,10 @@ class TestReactSmoke(unittest.TestCase):
             import openjiuwen  # noqa: F401
         except ImportError:
             self.skipTest("openjiuwen not installed in this environment")
-        from harness.react_agent import smoke_build_config
+        from harness.agents.react_agent import smoke_build_config
 
         info = smoke_build_config()
-        self.assertEqual(info["model"], "qwen3.6-35b-a3b-noreason")
+        self.assertEqual(info["model"], "qwen3.8-27b-noreason")
         self.assertTrue(info["has_model_client"])
 
 

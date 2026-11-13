@@ -7,9 +7,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from harness.scheduler import SimpleScheduler
-from harness.solver import SolverRegistry
-from harness.types import Result, Status, Task, TaskType
+from harness.runtime.scheduler import SimpleScheduler
+from harness.agents.solver import SolverRegistry
+from harness.domain.types import Result, Status, Task, TaskType
 
 
 class _EchoSolver:
@@ -66,7 +66,9 @@ class TestScheduler(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             task_dir = root / "csv_any"
-            task_dir.mkdir()
+            work = task_dir / "workspace"
+            work.mkdir(parents=True)
+            (work / "table.csv").write_text("units\n1\n2\n", encoding="utf-8")
             (task_dir / "task.json").write_text(
                 json.dumps(
                     {

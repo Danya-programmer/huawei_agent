@@ -28,12 +28,12 @@
 cost = completion_tokens + reasoning_tokens + ceil(prompt_tokens / 10)
 ```
 
-Доступные модели прокси:
+Доступные модели прокси (`LLM_MODEL`):
 
+- `qwen3.8-27b-noreason` ← **по умолчанию**
 - `qwen3.8-27b`
-- `qwen3.8-27b-noreason`
+- `qwen3.6-35b-a3b-noreason`
 - `qwen3.6-35b-a3b`
-- `qwen3.6-35b-a3b-noreason` ← по умолчанию
 
 ## Переменные окружения
 
@@ -41,12 +41,13 @@ cost = completion_tokens + reasoning_tokens + ceil(prompt_tokens / 10)
 |------------|------------|
 | `LLM_BASE_URL` | OpenAI-compatible proxy (обязательно) |
 | `LLM_API_KEY` | ключ proxy (обязательно) |
+| `LLM_MODEL` | модель из allow-list (по умолчанию `qwen3.8-27b-noreason`) |
 | `LLM_PROVIDER` | по умолчанию `OpenAI` |
 | `LLM_SSL_VERIFY` | `false` / `true` |
 | `TASKS` | каталог задач (если нет `--tasks-dir`) |
 | `OUT` | куда писать `cost_journal.jsonl` |
 | `BUDGET` | мягкий потолок в output-token units |
-| `MAX_WORKERS` | параллельность 1…5 |
+| `MAX_WORKERS` | параллельность 1…5 (по умолчанию **2**, иначе proxy часто даёт 429) |
 
 Ключи в git не кладутся. Пример: `.env.example` → `.env`.
 
@@ -78,29 +79,34 @@ python scripts/fit_estimates.py --journal out/cost_journal.jsonl
 
 ## Docker
 
-Быстрый путь (читает `.env`, собирает образ, гоняет `TASKS`):
+Каноничный локальный прогон test-100 (сборка + jury-like флаги, модель из `.env`):
 
 ```bash
+# .env: TASKS=./task_packs/test-100 LLM_MODEL=qwen3.8-27b-noreason BUDGET=100000
+find task_packs/test-100 -name answer.txt -delete
 sudo ./scripts/run_docker.sh
+# или: make docker-test
 ```
 
-Вручную (как у жюри):
+Вручную (как у жюри; локально добавь `-v "$OUT:/data/out" -e OUT=/data/out` для журнала):
 
 ```bash
 docker build -t hack:latest .
 mkdir -p "$OUT" && chmod 777 "$OUT"
 docker run --rm \
-  -e LLM_BASE_URL -e LLM_API_KEY \
+  -e LLM_BASE_URL -e LLM_API_KEY -e LLM_MODEL \
   -v "$TASKS:/data/tasks:rw" \
   -v "$OUT:/data/out:rw" -e OUT=/data/out \
   --read-only --tmpfs /tmp:rw,size=2g -e HOME=/tmp \
-  --cpus 8 --memory 16g \
+  --tmpfs /app/logs:rw,size=256m \
+  --cap-drop ALL --security-opt no-new-privileges \
+  --cpus 8 --memory 16g --pids-limit 512 \
   --workdir /app --entrypoint python \
   hack:latest \
   /app/run_agent.py --tasks-dir /data/tasks
 ```
 
-База: `python:3.11.10-slim-bookworm`, зависимость: `openjiuwen==0.1.19`.  
+База: `python:3.13.18-slim-bookworm` (openjiuwen не поддерживает 3.14), зависимости: `openjiuwen==0.1.20.post3`, `scikit-learn==1.9.1`.  
 Образ собирается без extras; runtime-загрузки запрещены. Лимит размера образа — 4GB.
 
 ## Наборы задач
@@ -142,6 +148,8 @@ make eval-test
 make score-test   # только пересчитать отчёт после уже сделанного прогона
 ```
 
+`score-test` оценивает coding как жюри: гоняет `python3 test_mylib.py` в `workspace/` (одного `DONE` в `answer.txt` недостаточно). Остальные типы — сверка `answer.txt` с expected (кавычки нормализуются).
+
 Куда смотреть результаты:
 
 - **`out/eval_report.md`** — сводка + таблица по каждой задаче + fails
@@ -151,22 +159,22 @@ make score-test   # только пересчитать отчёт после у
 ## Структура репозитория
 
 ```
-run_agent.py                 # entrypoint
-harness/
-  types.py cost.py usage.py
-  tasks.py io.py
-  estimate.py triage.py scheduler.py
-  react_agent.py             # openJiuwen ReAct + chat fallback
-  solvers/react_solver.py    # единый солвер на все типы
-scripts/
-  run_docker.sh calibrate.py fit_estimates.py
-  build_external_datasets.py score_pack.py
-Makefile                     # make eval-test
-task_packs/                  # zip + SOURCES.md
+run_agent.py                 # jury entrypoint (/app/run_agent.py)
+src/harness/                 # src-layout
+  domain/ infra/ runtime/ agents/
+scripts/                     # run_docker, score_pack, build packs, calibrate
+artifacts/models/            # solvability.joblib, tau.json, cost.joblib
+notebooks/                   # train_solvability / train_cost (Kaggle; вне образа)
+docs/                        # регламент, статьи
 tests/
-Dockerfile requirements.txt .env.example
+task_packs/                  # zip + SOURCES.md (HF-кэш → .cache/, не datasets/)
+Dockerfile pyproject.toml Makefile
 ```
+
+Веса: один каталог `artifacts/models/`. В образе Docker копируется в `/app/models`.
+Локально: `PYTHONPATH=src` (Makefile) или `pip install -e .`.
+Не создавай папку `datasets/` в корне — она перекрывает пакет HuggingFace `datasets`.
 
 ## Материалы
 
-См. [`полезные статьи.md`](полезные%20статьи.md) и [`Регламент соревнования.md`](Регламент%20соревнования.md).
+См. [`docs/полезные статьи.md`](docs/полезные%20статьи.md) и [`docs/Регламент соревнования.md`](docs/Регламент%20соревнования.md).
