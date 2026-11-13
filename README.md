@@ -28,12 +28,12 @@
 cost = completion_tokens + reasoning_tokens + ceil(prompt_tokens / 10)
 ```
 
-Доступные модели прокси:
+Доступные модели прокси (`LLM_MODEL`):
 
+- `qwen3.8-27b-noreason` ← **по умолчанию**
 - `qwen3.8-27b`
-- `qwen3.8-27b-noreason`
+- `qwen3.6-35b-a3b-noreason`
 - `qwen3.6-35b-a3b`
-- `qwen3.6-35b-a3b-noreason` ← по умолчанию
 
 ## Переменные окружения
 
@@ -41,12 +41,13 @@ cost = completion_tokens + reasoning_tokens + ceil(prompt_tokens / 10)
 |------------|------------|
 | `LLM_BASE_URL` | OpenAI-compatible proxy (обязательно) |
 | `LLM_API_KEY` | ключ proxy (обязательно) |
+| `LLM_MODEL` | модель из allow-list (по умолчанию `qwen3.8-27b-noreason`) |
 | `LLM_PROVIDER` | по умолчанию `OpenAI` |
 | `LLM_SSL_VERIFY` | `false` / `true` |
 | `TASKS` | каталог задач (если нет `--tasks-dir`) |
 | `OUT` | куда писать `cost_journal.jsonl` |
 | `BUDGET` | мягкий потолок в output-token units |
-| `MAX_WORKERS` | параллельность 1…5 |
+| `MAX_WORKERS` | параллельность 1…5 (по умолчанию **2**, иначе proxy часто даёт 429) |
 
 Ключи в git не кладутся. Пример: `.env.example` → `.env`.
 
@@ -78,23 +79,28 @@ python scripts/fit_estimates.py --journal out/cost_journal.jsonl
 
 ## Docker
 
-Быстрый путь (читает `.env`, собирает образ, гоняет `TASKS`):
+Каноничный локальный прогон test-100 (сборка + jury-like флаги, модель из `.env`):
 
 ```bash
+# .env: TASKS=./task_packs/test-100 LLM_MODEL=qwen3.8-27b-noreason BUDGET=100000
+find task_packs/test-100 -name answer.txt -delete
 sudo ./scripts/run_docker.sh
+# или: make docker-test
 ```
 
-Вручную (как у жюри):
+Вручную (как у жюри; локально добавь `-v "$OUT:/data/out" -e OUT=/data/out` для журнала):
 
 ```bash
 docker build -t hack:latest .
 mkdir -p "$OUT" && chmod 777 "$OUT"
 docker run --rm \
-  -e LLM_BASE_URL -e LLM_API_KEY \
+  -e LLM_BASE_URL -e LLM_API_KEY -e LLM_MODEL \
   -v "$TASKS:/data/tasks:rw" \
   -v "$OUT:/data/out:rw" -e OUT=/data/out \
   --read-only --tmpfs /tmp:rw,size=2g -e HOME=/tmp \
-  --cpus 8 --memory 16g \
+  --tmpfs /app/logs:rw,size=256m \
+  --cap-drop ALL --security-opt no-new-privileges \
+  --cpus 8 --memory 16g --pids-limit 512 \
   --workdir /app --entrypoint python \
   hack:latest \
   /app/run_agent.py --tasks-dir /data/tasks

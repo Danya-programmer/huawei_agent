@@ -11,7 +11,7 @@ from harness.io import (
 from harness.scheduler import SimpleScheduler, run_tasks
 from harness.solver import NotImplementedSolver, Solver, SolverRegistry
 from harness.solvers import build_default_registry
-from harness.types import ModelName, Result, Status, Task, TaskType, TokenUsage
+from harness.types import ModelName, Result, Status, Task, TaskType, TokenUsage, resolve_model
 
 __all__ = [
     "CostJournal",
@@ -30,6 +30,7 @@ __all__ = [
     "compute_call_cost",
     "discover_tasks",
     "load_task",
+    "resolve_model",
     "resolve_tasks_dir",
     "run_tasks",
 ]

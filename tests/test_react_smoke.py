@@ -14,7 +14,7 @@ class TestReactSmoke(unittest.TestCase):
         from harness.react_agent import smoke_build_config
 
         info = smoke_build_config()
-        self.assertEqual(info["model"], "qwen3.6-35b-a3b-noreason")
+        self.assertEqual(info["model"], "qwen3.8-27b-noreason")
         self.assertTrue(info["has_model_client"])
 
 

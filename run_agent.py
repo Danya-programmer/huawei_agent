@@ -59,7 +59,7 @@ def main(argv: list[str] | None = None) -> int:
 
     solvers = build_default_registry()
     journal = CostJournal.from_env()
-    max_workers = int(os.environ.get("MAX_WORKERS", "5") or "5")
+    max_workers = int(os.environ.get("MAX_WORKERS", "2") or "2")
 
     summary = run_tasks(
         tasks_dir,

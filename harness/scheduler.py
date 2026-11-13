@@ -13,9 +13,9 @@ from harness.solver import Solver, SolverRegistry
 from harness.triage import TaskProfile, triage
 from harness.types import Result, Status, Task
 
-# Cheap/deterministic pool size; coding/react hard-capped separately.
-DEFAULT_MAX_WORKERS = 5
-CODING_REACT_CONCURRENCY = 2
+# Keep concurrency low to avoid proxy 429s; override via MAX_WORKERS.
+DEFAULT_MAX_WORKERS = 2
+CODING_REACT_CONCURRENCY = 1
 
 
 @dataclass
@@ -237,12 +237,10 @@ class SimpleScheduler:
                     task, result = fut.result()
                     finalize(task, result)
 
-        run_phase(planned.phase_a, workers=self.max_workers, use_coding_cap=False)
-        run_phase(
-            planned.phase_b,
-            workers=min(self.max_workers, self.coding_concurrency),
-            use_coding_cap=True,
-        )
+        # Cap both phases — every task is ReAct and hits the same proxy.
+        react_workers = min(self.max_workers, self.coding_concurrency)
+        run_phase(planned.phase_a, workers=react_workers, use_coding_cap=True)
+        run_phase(planned.phase_b, workers=react_workers, use_coding_cap=True)
 
         summary.total_cost = self.journal.total_cost()
         return summary
@@ -296,8 +294,11 @@ def _budget_from_env() -> Optional[int]:
 
 
 def _looks_like_proxy_failure(result: Result) -> bool:
+    """Hard stop only on auth/quota death — not on per-call 429 (those are retried)."""
     err = (result.error or "").lower()
+    if "429" in err or "too many requests" in err:
+        return False
     return any(
         needle in err
-        for needle in ("budget", "proxy", "429", "401", "403", "quota", "exhausted")
+        for needle in ("401", "403", "quota exhausted", "budget_exhausted", "proxy")
     )
