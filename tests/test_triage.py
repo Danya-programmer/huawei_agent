@@ -13,6 +13,8 @@ from harness.runtime.scheduler import plan
 from harness.domain.tasks import load_task
 from harness.runtime.triage import triage
 
+import rank_isolation
+
 
 def _write_task(
     root: Path,
@@ -46,7 +48,7 @@ def _valid_coding(task_dir: Path) -> None:
 
 class TestTriageReactOnly(unittest.TestCase):
     def test_math_goes_to_react(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
+        with rank_isolation.no_rank_models(), tempfile.TemporaryDirectory() as td:
             root = Path(td)
             _write_task(root, "m0", "math", "What is 2+2?", 3)
             profile = triage(load_task(root / "m0"))
@@ -55,7 +57,7 @@ class TestTriageReactOnly(unittest.TestCase):
         self.assertEqual(profile.expected_cost, COST_SHORT_REACT)
 
     def test_csv_without_table_is_skipped(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
+        with rank_isolation.no_rank_models(), tempfile.TemporaryDirectory() as td:
             root = Path(td)
             _write_task(root, "d0", "data_analysis", "Sum column a in table.csv", 2)
             profile = triage(load_task(root / "d0"))
@@ -63,7 +65,7 @@ class TestTriageReactOnly(unittest.TestCase):
         self.assertEqual(profile.lane, "skip")
 
     def test_csv_with_table_goes_to_react(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
+        with rank_isolation.no_rank_models(), tempfile.TemporaryDirectory() as td:
             root = Path(td)
             task_dir = _write_task(root, "d0", "data_analysis", "Sum column a in table.csv", 2)
             work = task_dir / "workspace"
@@ -74,7 +76,7 @@ class TestTriageReactOnly(unittest.TestCase):
         self.assertEqual(profile.lane, "react")
 
     def test_empty_kb_is_skipped(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
+        with rank_isolation.no_rank_models(), tempfile.TemporaryDirectory() as td:
             root = Path(td)
             _write_task(root, "s0", "search", "Who founded Granite AI?", 1)
             profile = triage(load_task(root / "s0"))
@@ -82,7 +84,7 @@ class TestTriageReactOnly(unittest.TestCase):
         self.assertEqual(profile.lane, "skip")
 
     def test_search_with_kb_goes_to_react(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
+        with rank_isolation.no_rank_models(), tempfile.TemporaryDirectory() as td:
             root = Path(td)
             task_dir = _write_task(root, "s0", "search", "Who founded Granite AI?", 1)
             kb = task_dir / "workspace" / "kb"
@@ -93,7 +95,7 @@ class TestTriageReactOnly(unittest.TestCase):
         self.assertEqual(profile.lane, "react")
 
     def test_coding_lane(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
+        with rank_isolation.no_rank_models(), tempfile.TemporaryDirectory() as td:
             root = Path(td)
             task_dir = _write_task(root, "c0", "coding", "Fix mylib.py so tests pass.", 5)
             _valid_coding(task_dir)
@@ -104,7 +106,7 @@ class TestTriageReactOnly(unittest.TestCase):
             self.assertEqual(profile.expected_cost, heuristic_cost(task))
 
     def test_plan_orders_by_reward_per_token(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
+        with rank_isolation.no_rank_models(), tempfile.TemporaryDirectory() as td:
             root = Path(td)
             math_dir = _write_task(root, "m0", "math", "x", 1)
             code_dir = _write_task(root, "c0", "coding", "y", 5)

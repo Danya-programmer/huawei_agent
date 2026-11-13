@@ -1,102 +1,31 @@
-# Budget-aware openJiuwen harness
+# openJiuwen Challenge — budget-aware ReAct harness
 
-Харнесс для openJiuwen Challenge: набрать максимум баллов на наборе из ~100 задач при общем бюджете токенов.
+Решение для финала: максимум `reward` на ~100 задачах при мягком бюджете `BUDGET≈100000` output-token units.
 
-Все задачи решаются **только через ReAct** (openJiuwen + инструменты чтения/записи файлов, shell и Python). Шаблонных автосолверов нет.
+**Стек:** openJiuwen ReAct + proxy LLM (`qwen3.*`) + классический solvability-классификатор (HistGradientBoosting). Локальных нейросетей нет.
 
-## Пайплайн
+Точка входа жюри:
 
-1. Читает все каталоги с `task.json` из `--tasks-dir` / `TASKS`.
-2. Triage оценивает ожидаемую стоимость (без LLM): короткие ReAct vs coding.
-3. Планировщик сначала гоняет math / data_analysis / search, затем coding.
-4. Параллельность: до 5 сессий; coding/ReAct ограничен сильнее (≤2).
-5. Успех → сразу `answer.txt` в каталоге задачи.
-6. Журнал стоимости: `OUT/cost_journal.jsonl` (если задан `OUT`).
-
-| `task_type` | как решается |
-|-------------|--------------|
-| `math` | ReAct → ответ в `answer.txt` |
-| `data_analysis` | ReAct по CSV/таблицам в workspace |
-| `search` | ReAct по `kb/*.md` |
-| `coding` | ReAct правит `mylib.py`, затем проверка `test_mylib.py` |
-
-Точка входа жюри: `python /app/run_agent.py --tasks-dir /data/tasks`.
-
-## Учёт токенов
-
-```
-cost = completion_tokens + reasoning_tokens + ceil(prompt_tokens / 10)
+```text
+python /app/run_agent.py --tasks-dir /data/tasks
 ```
 
-Доступные модели прокси (`LLM_MODEL`):
+Ответ: `answer.txt` **рядом с** `task.json` (не в `workspace/`). За заведомо нерешаемые задачи файл **не создаётся**.
 
-- `qwen3.8-27b-noreason` ← **по умолчанию**
-- `qwen3.8-27b`
-- `qwen3.6-35b-a3b-noreason`
-- `qwen3.6-35b-a3b`
+---
 
-## Переменные окружения
+## Для проверяющих (быстрый старт)
 
-| переменная | назначение |
-|------------|------------|
-| `LLM_BASE_URL` | OpenAI-compatible proxy (обязательно) |
-| `LLM_API_KEY` | ключ proxy (обязательно) |
-| `LLM_MODEL` | модель из allow-list (по умолчанию `qwen3.8-27b-noreason`) |
-| `LLM_PROVIDER` | по умолчанию `OpenAI` |
-| `LLM_SSL_VERIFY` | `false` / `true` |
-| `TASKS` | каталог задач (если нет `--tasks-dir`) |
-| `OUT` | куда писать `cost_journal.jsonl` |
-| `BUDGET` | мягкий потолок в output-token units |
-| `MAX_WORKERS` | параллельность 1…5 (по умолчанию **2**, иначе proxy часто даёт 429) |
-
-Ключи в git не кладутся. Пример: `.env.example` → `.env`.
-
-Для NeuralDeep: `LLM_BASE_URL=https://api.neuraldeep.ru/v1` (не invite-страница hub).
-
-## Локальный запуск
+### Сборка и запуск (как у жюри)
 
 ```bash
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env   # заполни LLM_*
-unzip -qo task-dir.zip
-
-python run_agent.py --tasks-dir task-dir
-python -m unittest discover -s tests -q
-```
-
-Калибровка четырёх моделей:
-
-```bash
-python scripts/calibrate.py
-```
-
-Подгонка cost-band по журналу:
-
-```bash
-python scripts/fit_estimates.py --journal out/cost_journal.jsonl
-```
-
-## Docker
-
-Каноничный локальный прогон test-100 (сборка + jury-like флаги, модель из `.env`):
-
-```bash
-# .env: TASKS=./task_packs/test-100 LLM_MODEL=qwen3.8-27b-noreason BUDGET=100000
-find task_packs/test-100 -name answer.txt -delete
-sudo ./scripts/run_docker.sh
-# или: make docker-test
-```
-
-Вручную (как у жюри; локально добавь `-v "$OUT:/data/out" -e OUT=/data/out` для журнала):
-
-```bash
+# В окружении должны быть LLM_BASE_URL, LLM_API_KEY, LLM_MODEL, BUDGET
 docker build -t hack:latest .
-mkdir -p "$OUT" && chmod 777 "$OUT"
-docker run --rm \
+
+docker run --rm --name "run-${TEAM}" \
   -e LLM_BASE_URL -e LLM_API_KEY -e LLM_MODEL \
+  -e BUDGET="${BUDGET:-100000}" \
   -v "$TASKS:/data/tasks:rw" \
-  -v "$OUT:/data/out:rw" -e OUT=/data/out \
   --read-only --tmpfs /tmp:rw,size=2g -e HOME=/tmp \
   --tmpfs /app/logs:rw,size=256m \
   --cap-drop ALL --security-opt no-new-privileges \
@@ -106,75 +35,138 @@ docker run --rm \
   /app/run_agent.py --tasks-dir /data/tasks
 ```
 
-База: `python:3.13.18-slim-bookworm` (openjiuwen не поддерживает 3.14), зависимости: `openjiuwen==0.1.20.post3`, `scikit-learn==1.9.1`.  
-Образ собирается без extras; runtime-загрузки запрещены. Лимит размера образа — 4GB.
+Образ: `python:3.13.18-slim-bookworm`, `openjiuwen==0.1.20.post3`, `scikit-learn==1.9.1`.  
+Веса ранжирования копируются в образ: `artifacts/models/` → `/app/models/`. Runtime-загрузок нет.
 
-## Наборы задач
-
-Примеры организаторов: `task-dir.zip`.
-
-Свои packs из публичных датасетов (формат как у конкурса):
-
-| файл | содержимое |
-|------|----------|
-| [`task_packs/SOURCES.md`](task_packs/SOURCES.md) | источники и лицензии (в т.ч. AbstentionBench) |
-| `task_packs/test-100.zip` | 100 задач (25×4 типа, ~20% unsolvable) |
-| `task_packs/train-3000.zip` | 3000 задач, те же квоты |
-| `task_packs/abstention-pack.zip` | 100 заведомо нерешаемых (AbstentionBench-derived) |
+### Локальная проверка (команда)
 
 ```bash
+cp .env.example .env   # LLM_* + BUDGET=100000 + TASKS=./task_packs/test-100
 unzip -qo task_packs/test-100.zip -d task_packs
-python run_agent.py --tasks-dir task_packs/test-100
+find task_packs/test-100 -name answer.txt -delete
+sudo make docker-test BUDGET=100000
+# отчёт: out/eval_report.md
 ```
 
-Пересборка packs (нужен интернет к HuggingFace + PyPI):
+Юнит-тесты (без LLM):
 
 ```bash
-pip install -r requirements-datasets.txt
-python scripts/build_external_datasets.py --out task_packs --test-n 100 --train-n 3000 --seed 42
-# только abstention-pack:
-python scripts/build_external_datasets.py --out task_packs --abstention-only --abstention-n 100
+PYTHONPATH=src python -m unittest discover -s tests -q
 ```
 
-Подробнее: [`task_packs/README.md`](task_packs/README.md).
+---
 
-## Оценка на test-100
+## Как устроено решение
 
-Нужен `.env` с `LLM_*`. Полный прогон 100 ReAct-задач долгий и тратит токены прокси.
-
-```bash
-make eval-test
-# make eval-test BUDGET=50000
-make score-test   # только пересчитать отчёт после уже сделанного прогона
+```text
+discover tasks
+    → triage / assess (без LLM)
+         · structural skip (битые файлы, cue-фразы unsolvable math, …)
+         · solvability clf + tau  (coding / data_analysis / search)
+         · math: p=1, кроме cue-skip
+         · priority = p × reward / cost_hat
+    → одна очередь по priority (потом reward, task_id)
+    → ReAct (openJiuwen) под BUDGET
+    → atomic write answer.txt рядом с task.json
 ```
 
-`score-test` оценивает coding как жюри: гоняет `python3 test_mylib.py` в `workspace/` (одного `DONE` в `answer.txt` недостаточно). Остальные типы — сверка `answer.txt` с expected (кавычки нормализуются).
+| `task_type` | решение |
+|-------------|---------|
+| `math` | ReAct; hard-skip по cue-фразам underspec / contradictory |
+| `data_analysis` | ReAct по таблицам в `workspace/` |
+| `search` | ReAct по `kb/*.md` |
+| `coding` | ReAct правит `mylib.py`; жюри проверяет `test_mylib.py` |
 
-Куда смотреть результаты:
+### Ранжирование и бюджет
 
-- **`out/eval_report.md`** — сводка + таблица по каждой задаче + fails
-- `out/eval_report.json` — тот же отчёт в JSON
-- `out/cost_journal.jsonl` — сырой журнал харнесса
+- `priority = p_solvable × reward / cost_hat`
+- `cost_hat` — эвристика (~800 short / ~2500 coding), если нет `cost.joblib`
+- Перед запуском: если estimate не влезает в остаток `BUDGET` → статус `budget`, без LLM
+- Параллельность по умолчанию **1** ReAct-сессия (`CODING_REACT_CONCURRENCY=1`), чтобы не ловить 429 у proxy; `MAX_WORKERS` — потолок (обычно 2)
+
+### Solvability-модель
+
+| файл | роль |
+|------|------|
+| `artifacts/models/solvability.joblib` | HistGradientBoosting, schema v1, 32 фичи |
+| `artifacts/models/tau.json` | порог skip: `p < tau` |
+
+Переопределение каталога: `RANK_MODELS=/path/to/dir` (ожидает `solvability.joblib` + `tau.json`).
+
+Обучение (вне образа, Kaggle): `notebooks/train_solvability.ipynb`.
+
+### Учёт токенов
+
+```text
+cost = completion_tokens + reasoning_tokens + ceil(prompt_tokens / 10)
+```
+
+Журнал (локально): `OUT/cost_journal.jsonl`.
+
+---
+
+## Переменные окружения
+
+| переменная | назначение |
+|------------|------------|
+| `LLM_BASE_URL` | OpenAI-compatible proxy (**обязательно**) |
+| `LLM_API_KEY` | ключ proxy (**обязательно**) |
+| `LLM_MODEL` | `qwen3.8-27b-noreason` (default) / `qwen3.8-27b` / `qwen3.6-35b-a3b[-noreason]` |
+| `LLM_PROVIDER` | `OpenAI` |
+| `LLM_SSL_VERIFY` | `false` / `true` |
+| `BUDGET` | мягкий потолок output-token units |
+| `TASKS` | каталог задач, если нет `--tasks-dir` |
+| `OUT` | каталог/`cost_journal.jsonl` |
+| `MAX_WORKERS` | 1…5 (default **2**) |
+| `RANK_MODELS` | опционально: каталог с весами |
+
+Ключи в git не кладутся (`.env` в `.gitignore`). Пример: `.env.example`.
+
+---
 
 ## Структура репозитория
 
-```
-run_agent.py                 # jury entrypoint (/app/run_agent.py)
-src/harness/                 # src-layout
-  domain/ infra/ runtime/ agents/
-scripts/                     # run_docker, score_pack, build packs, calibrate
-artifacts/models/            # solvability.joblib, tau.json, cost.joblib
-notebooks/                   # train_solvability / train_cost (Kaggle; вне образа)
-docs/                        # регламент, статьи
+```text
+run_agent.py              # entrypoint жюри
+src/harness/
+  domain/                 # Task, Status, answer sanitize
+  infra/                  # journal, cost, HTTP retry
+  runtime/                # features, rank, triage, scheduler
+  agents/                 # openJiuwen ReAct solvers
+artifacts/models/         # solvability.joblib + tau.json  →  /app/models
+scripts/                  # run_docker.sh, score_pack.py, packs
+notebooks/                # обучение clf (не в образе)
 tests/
-task_packs/                  # zip + SOURCES.md (HF-кэш → .cache/, не datasets/)
-Dockerfile pyproject.toml Makefile
+task_packs/*.zip          # test-100 / train-3000 / abstention (SOURCES.md)
+Dockerfile Makefile requirements.txt
 ```
 
-Веса: один каталог `artifacts/models/`. В образе Docker копируется в `/app/models`.
-Локально: `PYTHONPATH=src` (Makefile) или `pip install -e .`.
-Не создавай папку `datasets/` в корне — она перекрывает пакет HuggingFace `datasets`.
+`PYTHONPATH=src` (как в Makefile/Docker) или `pip install -e .`.
+
+---
+
+## Локальная разработка
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env
+unzip -qo task_packs/test-100.zip -d task_packs
+PYTHONPATH=src python run_agent.py --tasks-dir task_packs/test-100
+```
+
+Оценка coding как жюри (`test_mylib.py` + сверка ответов):
+
+```bash
+make score-test
+```
+
+Пересборка своих packs (нужен HF): см. [`task_packs/README.md`](task_packs/README.md).
+
+---
 
 ## Материалы
 
-См. [`docs/полезные статьи.md`](docs/полезные%20статьи.md) и [`docs/Регламент соревнования.md`](docs/Регламент%20соревнования.md).
+- [`docs/Регламент соревнования.md`](docs/Регламент%20соревнования.md)
+- [`docs/полезные статьи.md`](docs/полезные%20статьи.md)
+- [`AGENTS.md`](AGENTS.md) — FAQ с установочной встречи

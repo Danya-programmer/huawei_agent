@@ -1,4 +1,4 @@
-"""Budget-aware scheduler: one list ordered by reward per expected token."""
+"""Budget-aware scheduler: triage → value-density order → one ReAct queue."""
 
 from __future__ import annotations
 
@@ -13,19 +13,23 @@ from harness.agents.solver import Solver, SolverRegistry
 from harness.runtime.triage import TaskProfile, triage
 from harness.domain.types import Result, Status, Task
 
-# Keep concurrency low to avoid proxy 429s; override via MAX_WORKERS.
-DEFAULT_MAX_WORKERS = 2
+# Hard ceiling; entrypoint defaults MAX_WORKERS=2. Effective workers are also
+# capped by CODING_REACT_CONCURRENCY (proxy-friendly serial ReAct).
+DEFAULT_MAX_WORKERS = 5
 CODING_REACT_CONCURRENCY = 1
 
 
 @dataclass
 class PlannedWork:
-    """Triage-partitioned task lists for the two-phase run."""
+    """Triage result: skips (no LLM) + one priority-ordered runnable list.
+
+    ``phase_b`` is kept empty for API compatibility with older tests/callers.
+    """
 
     profiles: dict[str, TaskProfile]
     skips: list[Task]
     phase_a: list[Task]
-    phase_b: list[Task]
+    phase_b: list[Task] = field(default_factory=list)
 
     @property
     def runnable(self) -> list[Task]:
@@ -85,11 +89,13 @@ class BudgetLedger:
             self.stop_reason = reason
 
 
-def plan(tasks: list[Task]) -> PlannedWork:
-    """Triage, then order runnable tasks by priority. phase_b stays empty.
+def _run_order_key(task: Task, profiles: dict[str, TaskProfile]) -> tuple:
+    """Higher value-density first, then reward, then stable task_id."""
+    return (-profiles[task.task_id].priority, -task.reward, task.task_id)
 
-    Coding concurrency is a semaphore in the runner, not a reason to go later.
-    """
+
+def plan(tasks: list[Task]) -> PlannedWork:
+    """Triage every task, drop structural / low-p skips, sort by value density."""
     profiles: dict[str, TaskProfile] = {}
     skips: list[Task] = []
     runnable: list[Task] = []
@@ -102,23 +108,12 @@ def plan(tasks: list[Task]) -> PlannedWork:
         else:
             runnable.append(task)
 
-    runnable.sort(
-        key=lambda t: (
-            -profiles[t.task_id].priority,
-            -t.reward,
-            t.task_id,
-        ),
-    )
-    return PlannedWork(
-        profiles=profiles,
-        skips=skips,
-        phase_a=runnable,
-        phase_b=[],
-    )
+    runnable.sort(key=lambda t: _run_order_key(t, profiles))
+    return PlannedWork(profiles=profiles, skips=skips, phase_a=runnable)
 
 
 class SimpleScheduler:
-    """Run the priority list. Coding shares the concurrency cap, not a later phase."""
+    """Run the priority queue under BUDGET; coding/ReAct share one concurrency cap."""
 
     def __init__(
         self,
@@ -146,7 +141,7 @@ class SimpleScheduler:
         return plan(tasks)
 
     def order_tasks(self, tasks: list[Task]) -> list[Task]:
-        """Runnable order: phase A then phase B (skips omitted)."""
+        """Runnable tasks in value-density order (skips omitted)."""
         return self.plan(tasks).runnable
 
     def run(self, tasks_dir: str | os.PathLike[str]) -> RunSummary:
@@ -236,10 +231,9 @@ class SimpleScheduler:
                     task, result = fut.result()
                     finalize(task, result)
 
-        # Cap both phases — every task is ReAct and hits the same proxy.
+        # Serial by default: every task is ReAct against the same proxy.
         react_workers = min(self.max_workers, self.coding_concurrency)
-        run_phase(planned.phase_a, workers=react_workers, use_coding_cap=True)
-        run_phase(planned.phase_b, workers=react_workers, use_coding_cap=True)
+        run_phase(planned.runnable, workers=react_workers, use_coding_cap=True)
 
         summary.total_cost = self.journal.total_cost()
         return summary

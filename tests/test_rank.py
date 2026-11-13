@@ -16,6 +16,8 @@ from harness.domain.tasks import load_task
 from harness.runtime.triage import triage
 from harness.domain.types import Result, Status, Task, TaskType
 
+import rank_isolation
+
 
 def _task(root: Path, task_id: str, task_type: str, instruction: str, reward: int) -> Path:
     task_dir = root / task_id
@@ -36,7 +38,7 @@ def _task(root: Path, task_id: str, task_type: str, instruction: str, reward: in
 
 class TestStructuralSkips(unittest.TestCase):
     def test_math_without_numbers_is_not_skipped(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
+        with rank_isolation.no_rank_models(), tempfile.TemporaryDirectory() as td:
             task_dir = _task(
                 Path(td),
                 "m0",
@@ -49,8 +51,22 @@ class TestStructuralSkips(unittest.TestCase):
         self.assertEqual(profile.lane, "react")
         self.assertIsNone(profile.fail_reason)
 
+    def test_math_unsolvable_cue_is_skipped(self) -> None:
+        with rank_isolation.no_rank_models(), tempfile.TemporaryDirectory() as td:
+            task_dir = _task(
+                Path(td),
+                "m1",
+                "math",
+                "A quantity is never numerically specified. If underdetermined, write NOTHING.",
+                4,
+            )
+            profile = triage(load_task(task_dir))
+        self.assertFalse(profile.feasible)
+        self.assertEqual(profile.lane, "skip")
+        self.assertEqual(profile.fail_reason, "math_unsolvable_cue")
+
     def test_syntax_error_in_mylib_is_not_skipped(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
+        with rank_isolation.no_rank_models(), tempfile.TemporaryDirectory() as td:
             task_dir = _task(Path(td), "c0", "coding", "Fix mylib.py.", 3)
             work = task_dir / "workspace"
             work.mkdir()
@@ -64,7 +80,7 @@ class TestStructuralSkips(unittest.TestCase):
         self.assertEqual(profile.lane, "coding")
 
     def test_foreign_import_is_skipped(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
+        with rank_isolation.no_rank_models(), tempfile.TemporaryDirectory() as td:
             task_dir = _task(Path(td), "c0", "coding", "Fix mylib.py.", 3)
             work = task_dir / "workspace"
             work.mkdir()
@@ -82,7 +98,7 @@ class TestStructuralSkips(unittest.TestCase):
             def solve(self, task: Task) -> Result:
                 raise AssertionError("skipped task must not be solved")
 
-        with tempfile.TemporaryDirectory() as td:
+        with rank_isolation.no_rank_models(), tempfile.TemporaryDirectory() as td:
             root = Path(td)
             task_dir = _task(root, "s0", "search", "Who founded Granite AI?", 2)
             registry = SolverRegistry()

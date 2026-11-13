@@ -82,6 +82,20 @@ _ARITH_RE = re.compile(
     r"merge|merged|minus|plus|times|divided|subtract|multiply)\b",
     re.IGNORECASE,
 )
+# Cue phrases from abstention / mutation unsolvable math prompts.
+_MATH_UNSOLVABLE_RE = re.compile(
+    r"\b("
+    r"underdetermined"
+    r"|never numerically specified"
+    r"|unknown number"
+    r"|exact count never stated"
+    r"|undocumented operations"
+    r"|contradictory givens"
+    r"|must be both .+ and .+ at once"
+    r"|write NOTHING"
+    r")\b",
+    re.IGNORECASE,
+)
 _DEF_RE = re.compile(r"^\s*def\s+\w+", re.MULTILINE)
 _ASSERT_RE = re.compile(r"\bassert\b|\bdef\s+test_\w+", re.IGNORECASE)
 
@@ -283,8 +297,16 @@ def vector(task: Any) -> list[float]:
 
 
 def structural_skip_reason(task: Any, feats: Optional[dict[str, float]] = None) -> Optional[str]:
-    """Comma-joined hard-fail flags, or None. Math never hard-fails."""
+    """Comma-joined hard-fail flags, or None.
+
+    Math skips only on explicit unsolvable cue phrases in the instruction.
+    """
     task_type = _task_type(task)
+    if task_type == "math":
+        instruction = str(getattr(task, "instruction", "") or "")
+        if _MATH_UNSOLVABLE_RE.search(instruction):
+            return "math_unsolvable_cue"
+        return None
     flags = _HARD_SKIP_FLAGS.get(task_type)
     if not flags:
         return None
